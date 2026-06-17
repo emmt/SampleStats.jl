@@ -316,23 +316,125 @@ end
 
 """
     stat = SampleStat{M}(x::Number)
+    stat = SampleStat{M,T}(x::Number)
 
 Return a sample statistics object for `M` moments of i.i.d. observations of the same type as
 `x` and initialized with the observation `x`. Hence, the returned object has a single
 observation, a mean equal to `x`, and all other moments equal to zero (with proper units).
+Optional type parameter `T` is the (floating-point) type of an observation assumed for the
+statistics; by default, `T = float(typeof(x))`.
 
 """
 SampleStat{M}(x::Number) where {M} = SampleStat{M,float(typeof(x))}(x)
 
-@generated function SampleStat{M,T}(x::Number) where {M,T<:Number}
-    check_order(M) || return :(throw_bad_order(M))
-    check_obstype(T) || return :(throw_bad_obstype(T))
-    z = zero(T)
-    moments = ntuple(k -> k == 1 ? :(convert($T, x)::$T) : z^k, Val(M))
+function SampleStat{M,T}(x::Number) where {M,T}
+    check_order(M) || throw_bad_order(M)
+    check_obstype(T) || throw_bad_obstype(T)
+    return _init(SampleStat{M,T}, x)
+end
+
+@generated function _init(::Type{SampleStat{M,T}}, x::Number) where {M,T}
     quote
         $(Expr(:meta, :inline))
-        return SampleStat{M,T,$(typeof(moments))}(1, $moments)
+        moments = $(ntuple(k -> k == 1 ? :(convert(T, x)::T) : zero(T)^k, Val(M)))
+        return SampleStat{M,T,typeof(moments)}(1, moments)
     end
+end
+
+"""
+    stat = SampleStat{M}(iter)
+    stat = SampleStat{M,T}(iter)
+
+Return a sample statistics object for `M` moments of i.i.d. observations of the same type as
+the elements of `iter` and initialized with the observations in `iter`. Hence, the returned
+object has `length(iter)` observations. Optional type parameter `T` is the (floating-point)
+type of an observation assumed for the statistics; by default, `T = float(eltype(iter))`.
+
+"""
+function SampleStat{M}(iter) where {M}
+    Base.IteratorEltype(iter) isa Base.HasEltype || throw(ArgumentError(
+        "`SampleStat{M}(iter)` requires that iterator has known element type, this may be overcome by `SampleStat{M,T}(iter)` "))
+    T = float(eltype(iter))
+    return SampleStat{M,T}(iter)
+end
+
+function SampleStat{M,T}(iter) where {M,T}
+    check_order(M) || throw_bad_order(M)
+    check_obstype(T) || throw_bad_obstype(T)
+    return _reduce(SampleStat{M,T}, iter)
+end
+
+# Fallback methods.
+SampleStat(x) = error("missing statistics order")
+SampleStat{M,T,V}(x) where {M,T,V} = SampleStat{M,T}(x)::SampleStat{M,T,V} # FIXME args...
+
+# `_reduce(S::Type{SampleStat{M,T}, x)` is like `reduce(S, x)` but assuming that `M`
+# and `T` have already been checked.
+
+function _reduce(::Type{SampleCount{T}}, iter) where {T}
+    if Base.IteratorSize(iter) isa Union{Base.HasLength, Base.HasShape}
+        n = length(iter)::Integer
+    else
+        n = 0
+        @inbounds @simd for x in iter
+            n += 1
+        end
+    end
+    return SampleCount{T}(n, ())
+end
+
+function _reduce(::Type{SampleMean{T}}, iter) where {T}
+    s = zero(T)
+    if Base.IteratorSize(iter) isa Union{Base.HasLength, Base.HasShape}
+        n = length(iter)::Integer
+        @inbounds @simd for x in iter
+            s += convert(T, x)
+        end
+    else
+        n = 0
+        @inbounds @simd for x in iter
+            n += 1
+            s += convert(T, x)
+        end
+    end
+    return SampleMean{T}(n, (s/n,))
+end
+
+function _reduce(::Type{SampleVariance{T}}, iter) where {T}
+    # 2-pass algorithm is usually faster than iterative merging.
+    s = zero(T)
+    if Base.IteratorSize(iter) isa Union{Base.HasLength, Base.HasShape}
+        n = length(iter)::Integer
+        @inbounds @simd for x in iter
+            s += oftype(s, x)
+        end
+    else
+        n = 0
+        @inbounds @simd for x in iter
+            n += 1
+            s += oftype(s, x)
+        end
+    end
+    μ = convert(T, s/n)
+    v = zero(T)^2
+    @inbounds @simd for x in iter
+        v += oftype(v, (x - μ)^2)
+    end
+    return SampleVariance{T}(n, (μ, v/n))
+end
+
+# Fallback method is only called for wrong arguments.
+@noinline function _reduce(::Type{SampleStat{M,T}}, iter) where {M,T}
+    M isa Int || throw(ArgumentError(
+        "in `SampleStat{M,T}`, `M` must be an `Int`, got `typeof(M) = $(typeof(M))`"))
+    M ≥ 0 || throw(ArgumentError(
+        "in `SampleStat{M,T}`, `M` must be non-negative, got `M = $M`"))
+    (isconcretetype(T) && T isa Number) || throw(ArgumentError(
+        "in `SampleStat{M,T}`, `T` must be a concrete numeric type, got `T = $T`"))
+    T === float(T) || throw(ArgumentError(
+        "in `SampleStat{M,T}`, `T` must be a floating-point numeric type, got `T = $T`"))
+    # Last possibility:
+    error("computing `$M`-order statistics is not yet implemented")
 end
 
 # Conversion constructors.
@@ -463,15 +565,7 @@ end
 # Extend `Base.reduce`, the many methods are needed to avoid ambiguities.
 Base.reduce(::Type{S}, x::Number) where {S<:SampleStat} = S(x)
 for T in (:Any, :AbstractArray, :(SharedArrays.SharedArray))
-    @eval Base.reduce(::Type{S}, xs::$T) where {S<:SampleStat} = _reduce(S, xs)
-end
-
-function _reduce(::Type{SampleStat{M}}, xs) where {M}
-    return merge(SampleStat{M}(eltype(xs)), xs)
-end
-
-function _reduce(::Type{SampleStat{M,T}}, xs) where {M,T}
-    return merge(SampleStat{M,T}(), xs)
+    @eval Base.reduce(::Type{S}, iter::$T) where {S<:SampleStat} = S(iter)
 end
 
 for f in (:isequal, :(==))
