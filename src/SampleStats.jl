@@ -412,18 +412,26 @@ function Base.merge(A::SampleStat{M,T,V}, xs #= iterator =#) where {M,T<:Number,
 end
 
 @inline function Base.merge(A::SampleCount, B::SampleCount)
-    return typeof(A)(count(A) + count(B), ())
+    return typeof(A)(count(A) + count(B), ()) # directly call inner constructor
 end
 
 @inline function Base.merge(A::SampleMean, B::SampleMean)
     T = get_precision(A)
     nA, μA = count(A), adapt_precision(T, A[1])
     nB, μB = count(B), adapt_precision(T, B[1])
+    #
+    # Merging of the mean:
+    #
+    #    n = nA + nB                   (1 op.)
+    #    μ = (nA/n)*μA + (nB/n)*μB     (+ 5 ops. but "symmetric")
+    #      = μA + (nB/n)*(μB - μA)     (+ 4 ops.)
+    #      = μB + (nA/n)*(μA - μB)     (+ 4 ops.)
+    #
     n = nA + nB
     α = (T(nA)/n)::T
     β = (T(nB)/n)::T
     μ = α*μA + β*μB
-    return typeof(A)(n, (μ,))
+    return typeof(A)(n, (μ,)) # directly call inner constructor
 end
 
 @inline function Base.merge(A::SampleVariance, B::SampleVariance)
@@ -435,17 +443,20 @@ end
     α = (T(nA)/n)::T
     β = (T(nB)/n)::T
     μ = α*μA + β*μB
-    # A simple expression for the merged variance which is nonnegative:
+    #
+    # A simple expression for the merged variance which is nonnegative (in 9 ops.):
     #
     #     v = α*(vA + (μA - μ)^2) + β*(vB + (μB - μ)^2)
     #
-    # Another version proposed by Pébay et al. (2016) is also nonnegative and involves fewer
-    # operations:
+    # Another version proposed by Pébay et al. (2016) is also nonnegative (in 8 ops.):
     #
-    #     v = (nA/n)*vA + (nB/n)*vB + (nA*nB/n)*(μB - μA)^2
+    #     v = α*vA + β*vB + α*β*(μA - μB)^2
     #
-    v = α*(vA + nB*(μB - μA)^2) + β*vB
-    return typeof(A)(n, (μ, v))
+    # factorization saves one operation and adds a small correction
+    # `β*(μA - μB)² ≈ β*σ²*(1/nA + 1/nB) ≈ σ²/n` `vA ≈ σ²` to `vA ≈ σ²`:
+    #
+    v = α*(vA + β*(μB - μA)^2) + β*vB
+    return typeof(A)(n, (μ, v)) # directly call inner constructor
 end
 
 # Extend `Base.reduce`, the many methods are needed to avoid ambiguities.
@@ -477,7 +488,7 @@ end
 function Base.isapprox(x::SampleMean, y::SampleMean; kwds...)
     return count(x) == count(y) && isapprox(moments(x)[1], moments(y)[1]; kwds...)
 end
-function Base.isapprox(x::SampleStat{M,Tx}, y::SampleStat{M,Ty},
+function Base.isapprox(x::SampleStat{M,Tx}, y::SampleStat{M,Ty};
                        atol::Number=zero(Tx)+zero(Ty), kwds...) where {M,Tx,Ty}
     # NOTE `atol` keyword refers to the mean, its power is taken for other modes.
     count(x) == count(y) || return false

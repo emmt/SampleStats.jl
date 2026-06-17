@@ -10,11 +10,12 @@ using TypeUtils
         Aqua.test_all(SampleStats)
     end
     @testset "Sample statistics  " begin
+        # Generate data.
         T = Float32 # single precision
         T² = typeof(zero(T)^2)
         Tp = Float64 # double precision, so that conversion T -> Tp is exact
         Tp² = typeof(zero(Tp)^2)
-        x = rand(T, 10_000) .- 1//2
+        x = rand(T, 10_000) .- T(1//3) # offset is to avoid "centered" variables
         mean_x = mean(x)
         var_x = var(x; corrected=true)
         var_x_biased = var(x; corrected=false)
@@ -246,6 +247,34 @@ using TypeUtils
         @test_throws Exception convert(SampleStat{2,Tp,Tuple{Tp,Tp²}}, s0)
         @test_throws Exception convert(SampleStat{2,Tp,Tuple{Tp,Tp²}}, s1)
         @test @inferred(convert(SampleStat{2,Tp,Tuple{Tp,Tp²}}, s2)) === s2p
+
+
+        # Merge statistics.
+        xa = view(x, 1:div(length(x),3))
+        na = length(xa)
+        xb = view(x, na+1:length(x))
+        nb = length(xb)
+        s0a = @inferred(reduce(SampleCount, xa))
+        @test count(s0a) == na
+        s0b = @inferred(reduce(SampleCount, xb))
+        @test count(s0b) == nb
+        s0ab = @inferred(merge(s0a, s0b))
+        @test count(s0ab) == count(s0)
+        @test s0ab ≈ s0
+        s1a = @inferred(reduce(SampleMean, xa))
+        @test count(s1a) == na
+        s1b = @inferred(reduce(SampleMean, xb))
+        @test count(s1b) == nb
+        s1ab = @inferred(merge(s1a, s1b))
+        @test count(s1ab) == count(s1)
+        @test s1ab ≈ s1
+        s2a = @inferred(reduce(SampleVariance, xa))
+        @test count(s2a) == na
+        s2b = @inferred(reduce(SampleVariance, xb))
+        @test count(s2b) == nb
+        s2ab = @inferred(merge(s2a, s2b))
+        @test count(s2ab) == count(s2)
+        @test s2ab ≈ s2
 
         # TypeUtils methods.
         #
