@@ -19,23 +19,87 @@ using TypeUtils
         mean_x = mean(x)
         var_x = var(x; corrected=true)
         var_x_biased = var(x; corrected=false)
+
+        # Empty sample statistics.
+        e0 = @inferred(SampleCount{T}())
+        @test typeof(e0) === SampleStat{0,T,Tuple{}}
+        @test order(e0) === 0
+        @test count(e0) == 0
+        @test isempty(e0)
+        @test @inferred(SampleStat{0,T}()) === e0
+        @test @inferred(empty(SampleStat{0,T})) === e0
+        @test @inferred(typeof(e0)()) === e0
+        @test @inferred(empty(e0)) === e0
+        @test @inferred(empty(typeof(e0))) === e0
+        #
+        e1 = @inferred(SampleMean{T}())
+        @test typeof(e1) === SampleStat{1,T,Tuple{T}}
+        @test order(e1) === 1
+        @test count(e1) == 0
+        @test isempty(e1)
+        @test @inferred(SampleStat{1,T}()) === e1
+        @test @inferred(empty(SampleStat{1,T})) === e1
+        @test @inferred(typeof(e1)()) === e1
+        @test @inferred(empty(e1)) === e1
+        @test @inferred(empty(typeof(e1))) === e1
+        #
+        e2 = @inferred(SampleVariance{T}())
+        @test typeof(e2) === SampleStat{2,T,Tuple{T,T²}}
+        @test order(e2) === 2
+        @test count(e2) == 0
+        @test isempty(e2)
+        @test @inferred(SampleVariance{T}()) === e2
+        @test @inferred(empty(SampleVariance{T})) === e2
+        @test @inferred(SampleStat{2,T}()) === e2
+        @test @inferred(empty(SampleStat{2,T})) === e2
+        @test @inferred(typeof(e2)()) === e2
+        @test @inferred(empty(e2)) === e2
+        @test @inferred(empty(typeof(e2))) === e2
+
+        # Build sample statistics by reduction.
         s0 = @inferred(reduce(SampleCount, x))
         @test typeof(s0) === SampleStat{0,T,Tuple{}}
-        @test order(s0) === 0
-        @test count(s0) == length(x)
+        @test @inferred(order(s0)) === 0
+        @test @inferred(count(s0)) == length(x)
+        @test @inferred(nobs(s0)) == count(s0)
+        @test !isempty(s0)
+        @test @inferred(empty(s0)) === e0
         s1 = @inferred(reduce(SampleMean, x))
         @test typeof(s1) === SampleStat{1,T,Tuple{T}}
-        @test order(s1) === 1
-        @test count(s1) == length(x)
+        @test @inferred(order(s1)) === 1
+        @test @inferred(count(s1)) == length(x)
+        @test @inferred(nobs(s1)) == count(s1)
+        @test !isempty(s1)
+        @test @inferred(empty(s1)) === e1
         @test mean(s1) ≈ mean_x
+        @test @inferred(moment(s1, 1)) == moments(s1)[1]
         s2 = @inferred(reduce(SampleVariance, x))
         @test typeof(s2) === SampleStat{2,T,Tuple{T,T²}}
-        @test order(s2) === 2
-        @test count(s2) == length(x)
+        @test @inferred(order(s2)) === 2
+        @test @inferred(count(s2)) == length(x)
+        @test @inferred(nobs(s2)) == count(s2)
+        @test !isempty(s2)
+        @test @inferred(empty(s2)) === e2
         @test mean(s2) ≈ mean_x
         @test var(s2) ≈ var_x
         @test var(s2; corrected=true) ≈ var_x
         @test var(s2; corrected=false) ≈ var_x_biased
+        @test @inferred(moment(s2, 1)) == moments(s2)[1]
+        @test @inferred(moment(s2, 2)) == moments(s2)[2]
+
+        # Show.
+        s = sprint((io, x) -> show(io, x), s0)
+        @test startswith(s, "SampleStat{0,")
+        s = sprint((io, x) -> show(io, MIME"text/plain"(), x), s0)
+        @test startswith(s, "SampleCount{")
+        s = sprint((io, x) -> show(io, x), s1)
+        @test startswith(s, "SampleStat{1,")
+        s = sprint((io, x) -> show(io, MIME"text/plain"(), x), s1)
+        @test startswith(s, "SampleMean{")
+        s = sprint((io, x) -> show(io, x), s2)
+        @test startswith(s, "SampleStat{2,")
+        s = sprint((io, x) -> show(io, MIME"text/plain"(), x), s2)
+        @test startswith(s, "SampleVariance{")
 
         # Comparison.
         s0r = @inferred(SampleStat{0,T}(length(x), ()))
@@ -248,6 +312,11 @@ using TypeUtils
         @test_throws Exception convert(SampleStat{2,Tp,Tuple{Tp,Tp²}}, s1)
         @test @inferred(convert(SampleStat{2,Tp,Tuple{Tp,Tp²}}, s2)) === s2p
 
+        # Common errors.
+        # TODO @test_throws AssertionError empty(SampleStat{0}) # missing type T
+        # TODO @test_throws AssertionError empty(SampleStat{0x00,T}) # invalid type for M
+        # TODO @test_throws AssertionError empty(SampleStat{-1,T}) # invalid value for M
+        @test_throws AssertionError empty(SampleStat{1,Int}) # T is not floating-point
 
         # Merge statistics.
         xa = view(x, 1:div(length(x),3))

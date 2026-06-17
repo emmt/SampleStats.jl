@@ -255,6 +255,7 @@ all moments equal to zero (with proper units).
 """
 SampleStat{M}(::Type{T}) where {M,T<:Number} = empty(SampleStat{M,float(T)})
 SampleStat{M,T}() where {M,T<:Number} = empty(SampleStat{M,T})
+SampleStat{M,T,V}() where {M,T<:Number,V} = empty(SampleStat{M,T})::SampleStat{M,T,V}
 
 """
     empty(stat::SampleStat)
