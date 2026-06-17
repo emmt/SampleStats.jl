@@ -57,6 +57,8 @@ using TypeUtils:
 
 using Base: @propagate_inbounds
 
+import SharedArrays
+
 """
     SampleStat{M,T,V}
 
@@ -446,10 +448,11 @@ end
     return typeof(A)(n, (μ, v))
 end
 
-# Extend `Base.reduce`, the 2 methods are needed to avoid ambiguities.
+# Extend `Base.reduce`, the many methods are needed to avoid ambiguities.
 Base.reduce(::Type{S}, x::Number) where {S<:SampleStat} = S(x)
-Base.reduce(::Type{S}, xs) where {S<:SampleStat} = _reduce(S, xs)
-Base.reduce(::Type{S}, xs::AbstractArray) where {S<:SampleStat} = _reduce(S, xs)
+for T in (:Any, :AbstractArray, :(SharedArrays.SharedArray))
+    @eval Base.reduce(::Type{S}, xs::$T) where {S<:SampleStat} = _reduce(S, xs)
+end
 
 function _reduce(::Type{SampleStat{M}}, xs) where {M}
     return merge(SampleStat{M}(eltype(xs)), xs)
