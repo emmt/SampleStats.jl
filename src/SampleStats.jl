@@ -241,8 +241,6 @@ end
 @inline powers(x::Number, ::Val{0}) = ()
 @inline powers(x::Number, ::Val{M}) where {M} = ntuple(n -> x^n, Val(M))
 
-Base.isempty(x::SampleStat) = iszero(count(x))
-
 """
     stat = SampleStat{M,T}()
     stat = SampleStat{M}(T) -> SampleStat{M,float(T)}()
@@ -253,9 +251,31 @@ it is automatically converted to floating-point. The returned object has no obse
 all moments equal to zero (with proper units).
 
 """
+SampleStat{M,T,V}() where {M,T<:Number,V} = SampleStat{M,T}()::SampleStat{M,T,V}
+SampleStat{M,T}() where {M,T<:Number} = _empty(SampleStat{M,T})
 SampleStat{M}(::Type{T}) where {M,T<:Number} = empty(SampleStat{M,float(T)})
-SampleStat{M,T}() where {M,T<:Number} = empty(SampleStat{M,T})
-SampleStat{M,T,V}() where {M,T<:Number,V} = empty(SampleStat{M,T})::SampleStat{M,T,V}
+
+@noinline SampleStat{M}() where {M} = error("missing observation type")
+@noinline SampleStat(::Type{T}) where {T<:Number} = error("missing statistic order")
+@noinline SampleStat() = error("missing statistic order and observation type")
+
+@generated function _empty(::Type{SampleStat{M,T}}) where {M,T}
+    check_order(M) || return :(throw_bad_order(M))
+    check_obstype(T) || return :(throw_bad_obstype(T))
+    moments = powers(zero(T), Val(M))
+    quote
+        $(Expr(:meta, :inline))
+        return SampleStat{M,T,$(typeof(moments))}(0, $moments)
+    end
+end
+
+"""
+    isempty(stat::SampleStat)
+
+Return whether sample statistics `stat` has no observations.
+
+"""
+Base.isempty(x::SampleStat) = iszero(count(x))
 
 """
     empty(stat::SampleStat)
@@ -265,18 +285,7 @@ Return a sample statistics object of same type as `stat` but with no observation
 
 """
 Base.empty(x::SampleStat) = empty(typeof(x))
-
-Base.empty(::Type{SampleStat{M,T,V}}) where {M,T,V} = empty(SampleStat{M,T})::SampleStat{M,T,V}
-
-@generated function Base.empty(::Type{SampleStat{M,T}}) where {M,T}
-    check_order(M) || return :(throw_bad_order(M))
-    check_obstype(T) || return :(throw_bad_obstype(T))
-    moments = powers(zero(T), Val(M))
-    quote
-        $(Expr(:meta, :inline))
-        return SampleStat{M,T,$(typeof(moments))}(0, $moments)
-    end
-end
+Base.empty(::Type{S}) where {S<:SampleStat} = S()
 
 """
     stat = SampleStat(n::Integer, moments::Tuple{Vararg{Number}})
@@ -295,11 +304,11 @@ cnt = SampleCount{Float32}(n, ()) # same as SampleStat{0,Float32}(n, ())
 ```
 
 """
-SampleStat(n::Integer, moments::NTuple{M,Number}) where {M} = SampleStat{M}(n, moments)
+SampleStat(n::Integer, moments::NTuple{M,Any}) where {M} = SampleStat{M}(n, moments)
 
 # Infer observation type `T` if not specified.
-@inline function SampleStat{M}(n::Integer, moments::NTuple{M,Number}) where {M}
-    M > 0 || error("type parameter `T` must be provided for `SampleCount` statistics")
+@inline function SampleStat{M}(n::Integer, moments::NTuple{M,Any}) where {M}
+    M > 0 || error("observation type `T` must be provided for `SampleCount` statistics")
     T = adapt_precision(default_precision(moments), typeof(moments[1]))
     return SampleStat{M,T}(n, moments)
 end
@@ -333,10 +342,15 @@ function SampleStat{M,T}(x::Number) where {M,T}
     return _init(SampleStat{M,T}, x)
 end
 
+@inline function _init(::Type{SampleStat{0,T}}, x::Number) where {T}
+    return SampleStat{0,T,Tuple{}}(1, ())
+end
+
 @generated function _init(::Type{SampleStat{M,T}}, x::Number) where {M,T}
+    moments = Expr(:tuple, :(convert(T, x)::T), [zero(T)^k for k in 2:M]...)
     quote
         $(Expr(:meta, :inline))
-        moments = $(ntuple(k -> k == 1 ? :(convert(T, x)::T) : zero(T)^k, Val(M)))
+        moments = $moments
         return SampleStat{M,T,typeof(moments)}(1, moments)
     end
 end
@@ -371,40 +385,22 @@ SampleStat{M,T,V}(x) where {M,T,V} = SampleStat{M,T}(x)::SampleStat{M,T,V} # FIX
 # `_reduce(S::Type{SampleStat{M,T}, x)` is like `reduce(S, x)` but assuming that `M`
 # and `T` have already been checked.
 
-function _reduce(::Type{SampleCount{T}}, iter) where {T}
+@inline function _reduce(::Type{SampleCount{T}}, iter) where {T}
     if Base.IteratorSize(iter) isa Union{Base.HasLength, Base.HasShape}
-        n = length(iter)::Integer
+        n = Int(length(iter)::Integer)::Int
     else
         n = 0
         @inbounds @simd for x in iter
             n += 1
         end
     end
-    return SampleCount{T}(n, ())
+    return SampleStat{0,T,Tuple{}}(n, ())
 end
 
-function _reduce(::Type{SampleMean{T}}, iter) where {T}
+@inline function _reduce(::Type{SampleMean{T}}, iter) where {T}
     s = zero(T)
     if Base.IteratorSize(iter) isa Union{Base.HasLength, Base.HasShape}
-        n = length(iter)::Integer
-        @inbounds @simd for x in iter
-            s += convert(T, x)
-        end
-    else
-        n = 0
-        @inbounds @simd for x in iter
-            n += 1
-            s += convert(T, x)
-        end
-    end
-    return SampleMean{T}(n, (s/n,))
-end
-
-function _reduce(::Type{SampleVariance{T}}, iter) where {T}
-    # 2-pass algorithm is usually faster than iterative merging.
-    s = zero(T)
-    if Base.IteratorSize(iter) isa Union{Base.HasLength, Base.HasShape}
-        n = length(iter)::Integer
+        n = Int(length(iter)::Integer)::Int
         @inbounds @simd for x in iter
             s += oftype(s, x)
         end
@@ -415,26 +411,31 @@ function _reduce(::Type{SampleVariance{T}}, iter) where {T}
             s += oftype(s, x)
         end
     end
-    μ = convert(T, s/n)
-    v = zero(T)^2
-    @inbounds @simd for x in iter
-        v += oftype(v, (x - μ)^2)
-    end
-    return SampleVariance{T}(n, (μ, v/n))
+    μ = (n < 1 ? s : s/n)::T
+    return SampleStat{1,T,Tuple{T}}(n, (μ,))
 end
 
-# Fallback method is only called for wrong arguments.
-@noinline function _reduce(::Type{SampleStat{M,T}}, iter) where {M,T}
-    M isa Int || throw(ArgumentError(
-        "in `SampleStat{M,T}`, `M` must be an `Int`, got `typeof(M) = $(typeof(M))`"))
-    M ≥ 0 || throw(ArgumentError(
-        "in `SampleStat{M,T}`, `M` must be non-negative, got `M = $M`"))
-    (isconcretetype(T) && T isa Number) || throw(ArgumentError(
-        "in `SampleStat{M,T}`, `T` must be a concrete numeric type, got `T = $T`"))
-    T === float(T) || throw(ArgumentError(
-        "in `SampleStat{M,T}`, `T` must be a floating-point numeric type, got `T = $T`"))
-    # Last possibility:
-    error("computing `$M`-order statistics is not yet implemented")
+@generated function _reduce(::Type{SampleStat{M,T}}, iter) where {M,T}
+    # For k ≥ 2, powers are computed as: u_k = u_1*u_{k-1}
+    init    = [:($(Symbol(:s_,k)) = zero(T)^$k) for k in 2:M]
+    update  = [:($(Symbol(:u_,k)) = u_1*$(Symbol(:u_,k-1));
+                 $(Symbol(:s_,k)) += $(Symbol(:u_,k))) for k in 2:M]
+    moments_n = Expr(:tuple, :(μ), [:($(Symbol(:s_,k))/n) for k in 2:M]...)
+    moments_0 = ntuple(k -> zero(T)^k, Val(M)) # moments when n=0
+    V = typeof(moments_0)
+    quote
+        $(Expr(:meta, :inline))
+        avg = SampleMean{T}(iter)
+        n = count(avg)
+        n ≥ 1 || return SampleStat{M,T,$V}(n, $(moments_0))
+        μ = avg[1]::T
+        $(init...)
+        @inbounds @simd for x in iter
+            u_1 = convert(T, x - μ)
+            $(update...)
+        end
+        return SampleStat{M,T,$V}(n, $(moments_n))
+    end
 end
 
 # Conversion constructors.
@@ -489,6 +490,9 @@ end
     return merge(A, convert(T, x)::T)
 end
 
+@noinline Base.merge(A::SampleStat{M,T}, x::T) where {M,T<:Number} =
+    error("merge $M-order sample statistics and number not implemented")
+
 @inline function Base.merge(A::SampleStat{0,T,V}, x::T) where {T<:Number,V}
     return SampleStat{0,T,V}(count(A) + 1, ())
 end
@@ -507,11 +511,8 @@ end
     return SampleStat{2,T,V}(n + 1, (μ + u, n*(v/(n + 1) + u*u)))
 end
 
-function Base.merge(A::SampleStat{M,T,V}, xs #= iterator =#) where {M,T<:Number,V}
-    @inbounds for x in xs
-        A = merge(A, x)
-    end
-    return A
+function Base.merge(A::SampleStat{M,T}, iter) where {M,T}
+    return merge(A, SampleStat{M,T}(iter))
 end
 
 @inline function Base.merge(A::SampleCount, B::SampleCount)
@@ -561,6 +562,13 @@ end
     v = α*(vA + β*(μB - μA)^2) + β*vB
     return typeof(A)(n, (μ, v)) # directly call inner constructor
 end
+
+@noinline function Base.merge(A::SampleStat, B::SampleStat)
+    A_str = "A::SampleStat{$(order(A)),$(obstype(A))}"
+    B_str = "B::SampleStat{$(order(B)),$(obstype(B))}"
+    error("`merge(A,B)` not implemented for `$A_str` and `$B_str`")
+end
+
 
 # Extend `Base.reduce`, the many methods are needed to avoid ambiguities.
 Base.reduce(::Type{S}, x::Number) where {S<:SampleStat} = S(x)

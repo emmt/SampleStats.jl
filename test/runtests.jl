@@ -6,362 +6,355 @@ using Test
 using TypeUtils
 
 @testset "SampleStats" begin
+    str(u::TypeUtils.NoUnits) = "none"
+    str(u::Any) = string(u)
+    brief(::Type{SampleStat{M,T}}) where {M,T} =
+        "order: $M, precision: $(get_precision(T)), units: $(str(units_of(T)))"
     @testset "Code quality (Aqua)" begin
         Aqua.test_all(SampleStats)
     end
-    @testset "Sample statistics  " begin
+    @testset "Sample statistics ($(brief(SampleStat{M,T})))" for (M,T) in (
+        (0, Float32), (1, Float32), (2, Float32), (3, Float32), (4, Float32),
+        )
+
         # Generate data.
-        T = Float32 # single precision
-        T² = typeof(zero(T)^2)
-        Tp = Float64 # double precision, so that conversion T -> Tp is exact
+        Tp = adapt_precision(get_precision(T) != Float32 ? Float32 : Float64, T)
+        n = 123
+        V = typeof(ntuple(k -> zero(T)^k, Val(M)))
+        Vp = typeof(ntuple(k -> zero(Tp)^k, Val(M)))
+        Tp = adapt_precision(Float64, T) # double precision, so that conversion T -> Tp is exact
         Tp² = typeof(zero(Tp)^2)
-        x = rand(T, 10_000) .- T(1//3) # offset is to avoid "centered" variables
-        mean_x = mean(x)
-        var_x = var(x; corrected=true)
-        var_x_biased = var(x; corrected=false)
+        Tp³ = typeof(zero(Tp)^3)
+        x = rand(T, n) .- T(1//3) # offset is to avoid "centered" variables
 
-        # Empty sample statistics.
-        e0 = @inferred(SampleCount{T}())
-        @test typeof(e0) === SampleStat{0,T,Tuple{}}
-        @test order(e0) === 0
-        @test count(e0) == 0
-        @test isempty(e0)
-        @test @inferred(SampleStat{0,T}()) === e0
-        @test @inferred(empty(SampleStat{0,T})) === e0
-        @test @inferred(typeof(e0)()) === e0
-        @test @inferred(empty(e0)) === e0
-        @test @inferred(empty(typeof(e0))) === e0
-        #
-        e1 = @inferred(SampleMean{T}())
-        @test typeof(e1) === SampleStat{1,T,Tuple{T}}
-        @test order(e1) === 1
-        @test count(e1) == 0
-        @test isempty(e1)
-        @test @inferred(SampleStat{1,T}()) === e1
-        @test @inferred(empty(SampleStat{1,T})) === e1
-        @test @inferred(typeof(e1)()) === e1
-        @test @inferred(empty(e1)) === e1
-        @test @inferred(empty(typeof(e1))) === e1
-        #
-        e2 = @inferred(SampleVariance{T}())
-        @test typeof(e2) === SampleStat{2,T,Tuple{T,T²}}
-        @test order(e2) === 2
-        @test count(e2) == 0
-        @test isempty(e2)
-        @test @inferred(SampleVariance{T}()) === e2
-        @test @inferred(empty(SampleVariance{T})) === e2
-        @test @inferred(SampleStat{2,T}()) === e2
-        @test @inferred(empty(SampleStat{2,T})) === e2
-        @test @inferred(typeof(e2)()) === e2
-        @test @inferred(empty(e2)) === e2
-        @test @inferred(empty(typeof(e2))) === e2
+        # Empty statistics.
+        ms = ntuple(k -> zero(T)^k, Val(M))
+        e = @inferred(SampleStat{M,T}())
+        @test typeof(e) === SampleStat{M,T,V}
+        @test M === @inferred(order(e))
+        @test T === @inferred(obstype(e))
+        @test 0 === @inferred(count(e))
+        @test 0 === @inferred(nobs(e))
+        @test e === @inferred(          typeof(e)())
+        @test_throws ErrorException SampleStat{M}()
+        @test_throws ErrorException SampleStat(   )
+        @test isempty(e)
+        @test e === @inferred(      empty(e))
+        @test e === @inferred(      empty(typeof(e)))
+        @test e === @inferred(      empty(SampleStat{M,T}))
+        @test_throws ErrorException empty(SampleStat{M})
+        @test_throws ErrorException empty(SampleStat)
+        @test ms === @inferred(moments(e))
+        @test typeof(ms) === V
+        @test e === @inferred(                typeof(e)(0, ms))
+        @test e === @inferred(          SampleStat{M,T}(0, ms))
+        if M == 0
+            @test_throws ErrorException SampleStat{M}(  0, ms)
+            @test_throws ErrorException SampleStat(     0, ms)
+        else
+            @test e === @inferred(      SampleStat{M}(  0, ms))
+            @test e === @inferred(      SampleStat(     0, ms))
+        end
+        if M == 0
+            @test e === @inferred(            SampleCount{T}())
+            @test_throws ErrorException       SampleCount(   )
+            @test e === @inferred(            SampleCount{T}(0, ms))
+            @test_throws ErrorException       SampleCount(   0, ms)
+            @test e === @inferred(      empty(SampleCount{T}))
+            @test_throws ErrorException empty(SampleCount)
+        elseif M == 1
+            @test e === @inferred(            SampleMean{T}())
+            @test_throws ErrorException       SampleMean(   )
+            @test e === @inferred(            SampleMean{T}(0, ms))
+            @test e === @inferred(            SampleMean(   0, ms))
+            @test e === @inferred(      empty(SampleMean{T}))
+            @test_throws ErrorException empty(SampleMean)
+        elseif M == 2
+            @test e === @inferred(            SampleVariance{T}())
+            @test_throws ErrorException       SampleVariance(   )
+            @test e === @inferred(            SampleVariance{T}(0, ms))
+            @test e === @inferred(            SampleVariance(   0, ms))
+            @test e === @inferred(      empty(SampleVariance{T}))
+            @test_throws ErrorException empty(SampleVariance)
+        end
 
-        # Build sample statistics by reduction.
-        s0 = @inferred(reduce(SampleCount, x))
-        @test typeof(s0) === SampleStat{0,T,Tuple{}}
-        @test @inferred(order(s0)) === 0
-        @test @inferred(count(s0)) == length(x)
-        @test @inferred(nobs(s0)) == count(s0)
-        @test !isempty(s0)
-        @test @inferred(empty(s0)) === e0
-        s1 = @inferred(reduce(SampleMean, x))
-        @test typeof(s1) === SampleStat{1,T,Tuple{T}}
-        @test @inferred(order(s1)) === 1
-        @test @inferred(count(s1)) == length(x)
-        @test @inferred(nobs(s1)) == count(s1)
-        @test !isempty(s1)
-        @test @inferred(empty(s1)) === e1
-        @test mean(s1) ≈ mean_x
-        @test @inferred(moment(s1, 1)) == moments(s1)[1]
-        s2 = @inferred(reduce(SampleVariance, x))
-        @test typeof(s2) === SampleStat{2,T,Tuple{T,T²}}
-        @test @inferred(order(s2)) === 2
-        @test @inferred(count(s2)) == length(x)
-        @test @inferred(nobs(s2)) == count(s2)
-        @test !isempty(s2)
-        @test @inferred(empty(s2)) === e2
-        @test mean(s2) ≈ mean_x
-        @test var(s2) ≈ var_x
-        @test var(s2; corrected=true) ≈ var_x
-        @test var(s2; corrected=false) ≈ var_x_biased
-        @test @inferred(moment(s2, 1)) == moments(s2)[1]
-        @test @inferred(moment(s2, 2)) == moments(s2)[2]
+        # Initialize sample statistics with a unique number.
+        x1 = first(x)
+        ms = ntuple(k -> k == 1 ? convert(T, x1) : zero(T)^k, Val(M))
+        #
+        u = @inferred(SampleStat{M,T}(x1))
+        @test typeof(u) === SampleStat{M,T,V}
+        @test M === @inferred(order(u))
+        @test T === @inferred(obstype(u))
+        @test 1 === @inferred(count(u))
+        @test 1 === @inferred(nobs(u))
+        @test u === @inferred(          typeof(u)(x1))
+        @test u === @inferred(      SampleStat{M}(x1))
+        @test_throws ErrorException SampleStat(   x1)
+        @test !isempty(u)
+        @test ms === @inferred(moments(u))
+        @test typeof(ms) === V
+        @test u === @inferred(                typeof(u)(1, ms))
+        @test u === @inferred(          SampleStat{M,T}(1, ms))
+        if M == 0
+            @test_throws ErrorException SampleStat{M}(  1, ms)
+            @test_throws ErrorException SampleStat(     1, ms)
+        else
+            @test u === @inferred(      SampleStat{M}(  1, ms))
+            @test u === @inferred(      SampleStat(     1, ms))
+        end
+        if M == 0
+            @test u === @inferred(      SampleCount{T}(x1))
+            @test u === @inferred(      SampleCount(   x1))
+            @test u === @inferred(      SampleCount{T}(1, ms))
+            @test_throws ErrorException SampleCount(   1, ms)
+        elseif M == 1
+            @test u === @inferred(      SampleMean(   x1))
+            @test u === @inferred(      SampleMean{T}(x1))
+            @test u === @inferred(      SampleMean(   1, ms))
+            @test u === @inferred(      SampleMean{T}(1, ms))
+        elseif M == 2
+            @test u === @inferred(      SampleVariance(   x1))
+            @test u === @inferred(      SampleVariance{T}(x1))
+            @test u === @inferred(      SampleVariance(   1, ms))
+            @test u === @inferred(      SampleVariance{T}(1, ms))
+        end
+
+        # Compute sample statistics from iterable object.
+        moments_x = ()
+        mean_x = zero(T)
+        var_x = zero(T)
+        var_x_biased = zero(T)
+        if M ≥ 1
+            μ = sum(x)/n # sample mean
+            xc = x .- μ # centered observations
+            moments_x = ntuple(k -> k == 1 ? μ : sum(xc.^k)/n, Val(M))
+            mean_x = mean(x)
+            @test moments_x[1] ≈ mean_x
+            if M ≥ 2
+                var_x = var(x; corrected=true)
+                var_x_biased = var(x; corrected=false)
+                @test moments_x[2] ≈ var_x_biased
+            end
+        end
+        @test typeof(moments_x) === V
+        #
+        s = @inferred(SampleStat{M,T}(x))
+        @test typeof(s) === SampleStat{M,T,V}
+        @test M === @inferred(order(s))
+        @test T === @inferred(obstype(s))
+        @test n === @inferred(count(s))
+        @test n === @inferred(nobs(s))
+        @test s === @inferred(          typeof(s)(x))
+        @test s === @inferred(      SampleStat{M}(x))
+        @test_throws ErrorException SampleStat(   x)
+        @test !isempty(s)
+        ms = @inferred(moments(s))
+        @test ms === ntuple(k -> s[k], Val(M))
+        @test ms === ntuple(k -> moment(s, k), Val(M))
+        @test typeof(ms) === V
+        if M == 0
+            @test ms === moments_x
+        else
+            for k in 1:M
+                @test ms[k] ≈ moments_x[k]
+            end
+        end
+        @test s === @inferred(                typeof(s)(n, ms))
+        @test s === @inferred(          SampleStat{M,T}(n, ms))
+        if M == 0
+            @test_throws ErrorException SampleStat{M}(  n, ms)
+            @test_throws ErrorException SampleStat(     n, ms)
+        else
+            @test s === @inferred(      SampleStat{M}(  n, ms))
+            @test s === @inferred(      SampleStat(     n, ms))
+        end
+        if M == 0
+            @test s === @inferred(      SampleCount(   x))
+            @test s === @inferred(      SampleCount{T}(x))
+            @test s === @inferred(      SampleCount{T}(n, ms))
+            @test_throws ErrorException SampleCount(   n, ms)
+        elseif M == 1
+            @test s === @inferred(      SampleMean(   x))
+            @test s === @inferred(      SampleMean{T}(x))
+            @test s === @inferred(      SampleMean{T}(n, ms))
+            @test s === @inferred(      SampleMean(   n, ms))
+        elseif M == 2
+            @test s === @inferred(      SampleVariance(   x))
+            @test s === @inferred(      SampleVariance{T}(x))
+            @test s === @inferred(      SampleVariance(   n, ms))
+            @test s === @inferred(      SampleVariance{T}(n, ms))
+        end
+        #
+        @test e === @inferred(SampleStat{M}(T[]))
+        @test u === @inferred(SampleStat{M}([x1]))
+
+        # Compare computed moments with those from `Statistics` or `StatsBase`.
+        if M ≥ 1
+            @test @inferred(mean(s)) ≈ mean_x
+        end
+        if M ≥ 2
+            @test @inferred(var(s)) ≈ var_x
+            @test @inferred(var(s; corrected=true)) ≈ var_x
+            @test @inferred(var(s; corrected=false)) ≈ var_x_biased
+        end
+
+        # Call `reduce` to compute statistics.
+        @test s === @inferred(      reduce(typeof(s),     x))
+        @test s === @inferred(      reduce(SampleStat{M}, x))
+        @test_throws ErrorException reduce(SampleStat,    x)
+        if M == 0
+            @test s === @inferred(  reduce(SampleCount,    x))
+            @test s === @inferred(  reduce(SampleCount{T}, x))
+        elseif M == 1
+            @test s === @inferred(  reduce(SampleMean,    x))
+            @test s === @inferred(  reduce(SampleMean{T}, x))
+        elseif M == 2
+            @test s === @inferred(  reduce(SampleVariance,    x))
+            @test s === @inferred(  reduce(SampleVariance{T}, x))
+        end
 
         # Show.
-        s = sprint((io, x) -> show(io, x), s0)
-        @test startswith(s, "SampleStat{0,")
-        s = sprint((io, x) -> show(io, MIME"text/plain"(), x), s0)
-        @test startswith(s, "SampleCount{")
-        s = sprint((io, x) -> show(io, x), s1)
-        @test startswith(s, "SampleStat{1,")
-        s = sprint((io, x) -> show(io, MIME"text/plain"(), x), s1)
-        @test startswith(s, "SampleMean{")
-        s = sprint((io, x) -> show(io, x), s2)
-        @test startswith(s, "SampleStat{2,")
-        s = sprint((io, x) -> show(io, MIME"text/plain"(), x), s2)
-        @test startswith(s, "SampleVariance{")
+        q = sprint((io, x) -> show(io, x), s)
+        @test startswith(q, "SampleStat{$M,")
+        q = sprint((io, x) -> show(io, MIME"text/plain"(), x), s)
+        if M == 0
+            @test startswith(q, "SampleCount{")
+        elseif M == 1
+            @test startswith(q, "SampleMean{")
+        elseif M == 2
+            @test startswith(q, "SampleVariance{")
+        else
+            @test startswith(q, "SampleStat{$M,")
+        end
+
+        # Change precision.
+        sp = @inferred(SampleStat{M,Tp}(count(s), moments(s)))
+        @test @inferred(order(sp)) === M
+        @test @inferred(order(typeof(sp))) === M
+        @test @inferred(obstype(sp)) === Tp
+        @test @inferred(obstype(typeof(sp))) === Tp
+        @test @inferred(count(sp)) === n
+        @test @inferred(moments(sp)) === adapt_precision(Tp, moments(s))
+        @test sp !== s
 
         # Comparison.
-        s0r = @inferred(SampleStat{0,T}(length(x), ()))
-        s1r = @inferred(SampleStat{1,T}(length(x), (mean_x,)))
-        s2r = @inferred(SampleStat{2,T}(length(x), (mean_x, var_x_biased)))
-        @test s0 == s0r
-        @test s1 == s1 # NOTE due to rounding errors, s1r = s1 may no hold
-        @test s2 == s2 # NOTE due to rounding errors, s2r = s2 may no hold
-        @test s0 == s0r
-        @test s0 ≈ s0r
-        @test s1 ≈ s1r
-        @test s2 ≈ s2r
+        sr = @inferred(SampleStat{M,T}(length(x), moments_x))
+        @test typeof(sr) === typeof(s)
+        if M == 0
+            # For M = 0, there are no possible rounding errors; hence, compare exactly.
+            @test s === sr
+            @test s == sr
+            @test s ≈ sr
+            @test s ≈ sp rtol=1e-5
+        else
+            # For M > 0, due to rounding errors, only compare approximately.
+            @test s == s
+            @test s ≈ sr
+            @test s ≈ sp rtol=1e-5
+        end
 
         # Conversions.
         #
+        # - change nothing:
+        @test s === @inferred(        typeof(s)(       s))
+        @test s === @inferred(convert(typeof(s),       s))
+        @test s === @inferred(        SampleStat{M,T}( s))
+        @test s === @inferred(convert(SampleStat{M,T}, s))
+        @test s === @inferred(        SampleStat{M}(   s))
+        @test s === @inferred(convert(SampleStat{M},   s))
+        @test s === @inferred(        SampleStat(      s))
+        @test s === @inferred(convert(SampleStat,      s))
+        if M == 0
+            @test s === @inferred(        SampleCount{T}( s))
+            @test s === @inferred(convert(SampleCount{T}, s))
+            @test s === @inferred(        SampleCount(    s))
+            @test s === @inferred(convert(SampleCount,    s))
+        elseif M == 1
+            @test s === @inferred(        SampleMean{T}( s))
+            @test s === @inferred(convert(SampleMean{T}, s))
+            @test s === @inferred(        SampleMean(    s))
+            @test s === @inferred(convert(SampleMean,    s))
+        elseif M == 2
+            @test s === @inferred(        SampleVariance{T}( s))
+            @test s === @inferred(convert(SampleVariance{T}, s))
+            @test s === @inferred(        SampleVariance(    s))
+            @test s === @inferred(convert(SampleVariance,    s))
+        end
+        #
         # - change observation type:
-        s0p = @inferred(SampleCount{Tp}(count(s0), moments(s0)))
-        @test order(s0p) === 0
-        @test obstype(s0p) === Tp
-        @test count(s0p) == count(s0)
-        @test moments(s0p) === adapt_precision(Tp, moments(s0))
-        @test s0p !== s0
-        @test s0p == s0
-        @test s0p ≈ s0
-        s1p = @inferred(SampleMean{Tp}(count(s1), moments(s1)))
-        @test order(s1p) === 1
-        @test obstype(s1p) === Tp
-        @test count(s1p) == count(s1)
-        @test moments(s1p) === adapt_precision(Tp, moments(s1))
-        @test s1p !== s1
-        @test s1p == s1
-        @test s1p ≈ s1
-        s2p = @inferred(SampleVariance{Tp}(count(s2), moments(s2)))
-        @test order(s2p) === 2
-        @test obstype(s2p) === Tp
-        @test count(s2p) == count(s2)
-        @test moments(s2p) === adapt_precision(Tp, moments(s2))
-        @test s2p !== s2
-        @test s2p == s2
-        @test s2p ≈ s2
+        @test sp === @inferred(        typeof(sp)(       s))
+        @test sp === @inferred(convert(typeof(sp),       s))
+        @test sp === @inferred(        SampleStat{M,Tp}( s))
+        @test sp === @inferred(convert(SampleStat{M,Tp}, s))
+        if M == 0
+            @test sp === @inferred(        SampleCount{Tp}( s))
+            @test sp === @inferred(convert(SampleCount{Tp}, s))
+        elseif M == 1
+            @test sp === @inferred(        SampleMean{Tp}( s))
+            @test sp === @inferred(convert(SampleMean{Tp}, s))
+        elseif M == 2
+            @test sp === @inferred(        SampleVariance{Tp}( s))
+            @test sp === @inferred(convert(SampleVariance{Tp}, s))
+        end
         #
-        # - SampleStat(x)
-        @test @inferred(SampleStat(s0)) === s0
-        @test @inferred(SampleStat(s1)) === s1
-        @test @inferred(SampleStat(s2)) === s2
-        #
-        @test @inferred(convert(SampleStat, s0)) === s0
-        @test @inferred(convert(SampleStat, s1)) === s1
-        @test @inferred(convert(SampleStat, s2)) === s2
-        #
-        # - SampleCount(x)
-        @test @inferred(SampleCount(s0)) === s0
-        @test @inferred(SampleCount(s1)) === s0
-        @test @inferred(SampleCount(s2)) === s0
-        @test @inferred(SampleCount{T}(s0)) === s0
-        @test @inferred(SampleCount{T}(s1)) === s0
-        @test @inferred(SampleCount{T}(s2)) === s0
-        @test @inferred(SampleCount{Tp}(s0)) === s0p
-        @test @inferred(SampleCount{Tp}(s1)) === s0p
-        @test @inferred(SampleCount{Tp}(s2)) === s0p
-        #
-        @test @inferred(convert(SampleCount, s0)) === s0
-        @test @inferred(convert(SampleCount, s1)) === s0
-        @test @inferred(convert(SampleCount, s2)) === s0
-        @test @inferred(convert(SampleCount{T}, s0)) === s0
-        @test @inferred(convert(SampleCount{T}, s1)) === s0
-        @test @inferred(convert(SampleCount{T}, s2)) === s0
-        @test @inferred(convert(SampleCount{Tp}, s0)) === s0p
-        @test @inferred(convert(SampleCount{Tp}, s1)) === s0p
-        @test @inferred(convert(SampleCount{Tp}, s2)) === s0p
-        #
-        # - SampleMean(x)
-        @test_throws Exception SampleMean(s0)
-        @test @inferred(SampleMean(s1)) === s1
-        @test @inferred(SampleMean(s2)) === s1
-        @test_throws Exception SampleMean{T}(s0)
-        @test @inferred(SampleMean{T}(s1)) === s1
-        @test @inferred(SampleMean{T}(s2)) === s1
-        @test_throws Exception SampleMean{Tp}(s0)
-        @test @inferred(SampleMean{Tp}(s1)) === s1p
-        @test @inferred(SampleMean{Tp}(s2)) === s1p
-        #
-        @test_throws Exception convert(SampleMean, s0)
-        @test @inferred(convert(SampleMean, s1)) === s1
-        @test @inferred(convert(SampleMean, s2)) === s1
-        @test_throws Exception convert(SampleMean{T}, s0)
-        @test @inferred(convert(SampleMean{T}, s1)) === s1
-        @test @inferred(convert(SampleMean{T}, s2)) === s1
-        @test_throws Exception convert(SampleMean{Tp}, s0)
-        @test @inferred(convert(SampleMean{Tp}, s1)) === s1p
-        @test @inferred(convert(SampleMean{Tp}, s2)) === s1p
-        #
-        # - SampleVariance(x)
-        @test_throws Exception SampleVariance(s0)
-        @test_throws Exception SampleVariance(s1)
-        @test @inferred(SampleVariance(s2)) === s2
-        @test_throws Exception SampleVariance{T}(s0)
-        @test_throws Exception SampleVariance{T}(s1)
-        @test @inferred(SampleVariance{T}(s2)) === s2
-        @test_throws Exception SampleVariance{Tp}(s0)
-        @test_throws Exception SampleVariance{Tp}(s1)
-        @test @inferred(SampleVariance{Tp}(s2)) === s2p
-        #
-        @test_throws Exception convert(SampleVariance, s0)
-        @test_throws Exception convert(SampleVariance, s1)
-        @test @inferred(convert(SampleVariance, s2)) === s2
-        @test_throws Exception convert(SampleVariance{T}, s0)
-        @test_throws Exception convert(SampleVariance{T}, s1)
-        @test @inferred(convert(SampleVariance{T}, s2)) === s2
-        @test_throws Exception convert(SampleVariance{Tp}, s0)
-        @test_throws Exception convert(SampleVariance{Tp}, s1)
-        @test @inferred(convert(SampleVariance{Tp}, s2)) === s2p
-        #
-        # - SampleStat{0}(x)
-        @test @inferred(SampleStat{0}(s0)) === s0
-        @test @inferred(SampleStat{0}(s1)) === s0
-        @test @inferred(SampleStat{0}(s2)) === s0
-        @test @inferred(SampleStat{0,T}(s0)) === s0
-        @test @inferred(SampleStat{0,T}(s1)) === s0
-        @test @inferred(SampleStat{0,T}(s2)) === s0
-        @test @inferred(SampleStat{0,T,Tuple{}}(s0)) === s0
-        @test @inferred(SampleStat{0,T,Tuple{}}(s1)) === s0
-        @test @inferred(SampleStat{0,T,Tuple{}}(s2)) === s0
-        @test @inferred(SampleStat{0,Tp}(s0)) === s0p
-        @test @inferred(SampleStat{0,Tp}(s1)) === s0p
-        @test @inferred(SampleStat{0,Tp}(s2)) === s0p
-        @test @inferred(SampleStat{0,Tp,Tuple{}}(s0)) === s0p
-        @test @inferred(SampleStat{0,Tp,Tuple{}}(s1)) === s0p
-        @test @inferred(SampleStat{0,Tp,Tuple{}}(s2)) === s0p
-        #
-        @test @inferred(convert(SampleStat{0}, s0)) === s0
-        @test @inferred(convert(SampleStat{0}, s1)) === s0
-        @test @inferred(convert(SampleStat{0}, s2)) === s0
-        @test @inferred(convert(SampleStat{0,T}, s0)) === s0
-        @test @inferred(convert(SampleStat{0,T}, s1)) === s0
-        @test @inferred(convert(SampleStat{0,T}, s2)) === s0
-        @test @inferred(convert(SampleStat{0,T,Tuple{}}, s0)) === s0
-        @test @inferred(convert(SampleStat{0,T,Tuple{}}, s1)) === s0
-        @test @inferred(convert(SampleStat{0,T,Tuple{}}, s2)) === s0
-        @test @inferred(convert(SampleStat{0,Tp}, s0)) === s0p
-        @test @inferred(convert(SampleStat{0,Tp}, s1)) === s0p
-        @test @inferred(convert(SampleStat{0,Tp}, s2)) === s0p
-        @test @inferred(convert(SampleStat{0,Tp,Tuple{}}, s0)) === s0p
-        @test @inferred(convert(SampleStat{0,Tp,Tuple{}}, s1)) === s0p
-        @test @inferred(convert(SampleStat{0,Tp,Tuple{}}, s2)) === s0p
-        #
-        # - SampleStat{1}(x)
-        @test_throws Exception SampleStat{1}(s0)
-        @test @inferred(SampleStat{1}(s1)) === s1
-        @test @inferred(SampleStat{1}(s2)) === s1
-        @test_throws Exception SampleStat{1,T}(s0)
-        @test @inferred(SampleStat{1,T}(s1)) === s1
-        @test @inferred(SampleStat{1,T}(s2)) === s1
-        @test_throws Exception SampleStat{1,T,Tuple{T}}(s0)
-        @test @inferred(SampleStat{1,T,Tuple{T}}(s1)) === s1
-        @test @inferred(SampleStat{1,T,Tuple{T}}(s2)) === s1
-        @test_throws Exception SampleStat{1,Tp}(s0)
-        @test @inferred(SampleStat{1,Tp}(s1)) === s1p
-        @test @inferred(SampleStat{1,Tp}(s2)) === s1p
-        @test_throws Exception SampleStat{1,Tp,Tuple{Tp}}(s0)
-        @test @inferred(SampleStat{1,Tp,Tuple{Tp}}(s1)) === s1p
-        @test @inferred(SampleStat{1,Tp,Tuple{Tp}}(s2)) === s1p
-        #
-        @test_throws Exception convert(SampleStat{1}, s0)
-        @test @inferred(convert(SampleStat{1}, s1)) === s1
-        @test @inferred(convert(SampleStat{1}, s2)) === s1
-        @test_throws Exception convert(SampleStat{1,T}, s0)
-        @test @inferred(convert(SampleStat{1,T}, s1)) === s1
-        @test @inferred(convert(SampleStat{1,T}, s2)) === s1
-        @test_throws Exception convert(SampleStat{1,T,Tuple{T}}, s0)
-        @test @inferred(convert(SampleStat{1,T,Tuple{T}}, s1)) === s1
-        @test @inferred(convert(SampleStat{1,T,Tuple{T}}, s2)) === s1
-        @test_throws Exception convert(SampleStat{1,Tp}, s0)
-        @test @inferred(convert(SampleStat{1,Tp}, s1)) === s1p
-        @test @inferred(convert(SampleStat{1,Tp}, s2)) === s1p
-        @test_throws Exception convert(SampleStat{1,Tp,Tuple{Tp}}, s0)
-        @test @inferred(convert(SampleStat{1,Tp,Tuple{Tp}}, s1)) === s1p
-        @test @inferred(convert(SampleStat{1,Tp,Tuple{Tp}}, s2)) === s1p
-        #
-        # - SampleStat{2}(x)
-        @test_throws Exception SampleStat{2}(s0)
-        @test_throws Exception SampleStat{2}(s1)
-        @test @inferred(SampleStat{2}(s2)) === s2
-        @test_throws Exception SampleStat{2,T}(s0)
-        @test_throws Exception SampleStat{2,T}(s1)
-        @test @inferred(SampleStat{2,T}(s2)) === s2
-        @test_throws Exception SampleStat{2,T,Tuple{T,T²}}(s0)
-        @test_throws Exception SampleStat{2,T,Tuple{T,T²}}(s1)
-        @test @inferred(SampleStat{2,T,Tuple{T,T²}}(s2)) === s2
-        @test_throws Exception SampleStat{2,Tp}(s0)
-        @test_throws Exception SampleStat{2,Tp}(s1)
-        @test @inferred(SampleStat{2,Tp}(s2)) === s2p
-        @test_throws Exception SampleStat{2,Tp,Tuple{Tp,Tp²}}(s0)
-        @test_throws Exception SampleStat{2,Tp,Tuple{Tp,Tp²}}(s1)
-        @test @inferred(SampleStat{2,Tp,Tuple{Tp,Tp²}}(s2)) === s2p
-        #
-        @test_throws Exception convert(SampleStat{2}, s0)
-        @test_throws Exception convert(SampleStat{2}, s1)
-        @test @inferred(convert(SampleStat{2}, s2)) === s2
-        @test_throws Exception convert(SampleStat{2,T}, s0)
-        @test_throws Exception convert(SampleStat{2,T}, s1)
-        @test @inferred(convert(SampleStat{2,T}, s2)) === s2
-        @test_throws Exception convert(SampleStat{2,T,Tuple{T,T²}}, s0)
-        @test_throws Exception convert(SampleStat{2,T,Tuple{T,T²}}, s1)
-        @test @inferred(convert(SampleStat{2,T,Tuple{T,T²}}, s2)) === s2
-        @test_throws Exception convert(SampleStat{2,Tp}, s0)
-        @test_throws Exception convert(SampleStat{2,Tp}, s1)
-        @test @inferred(convert(SampleStat{2,Tp}, s2)) === s2p
-        @test_throws Exception convert(SampleStat{2,Tp,Tuple{Tp,Tp²}}, s0)
-        @test_throws Exception convert(SampleStat{2,Tp,Tuple{Tp,Tp²}}, s1)
-        @test @inferred(convert(SampleStat{2,Tp,Tuple{Tp,Tp²}}, s2)) === s2p
-
-        # Common errors.
-        # TODO @test_throws AssertionError empty(SampleStat{0}) # missing type T
-        # TODO @test_throws AssertionError empty(SampleStat{0x00,T}) # invalid type for M
-        # TODO @test_throws AssertionError empty(SampleStat{-1,T}) # invalid value for M
-        @test_throws AssertionError empty(SampleStat{1,Int}) # T is not floating-point
-
-        # Merge statistics.
-        xa = view(x, 1:div(length(x),3))
-        na = length(xa)
-        xb = view(x, na+1:length(x))
-        nb = length(xb)
-        s0a = @inferred(reduce(SampleCount, xa))
-        @test count(s0a) == na
-        s0b = @inferred(reduce(SampleCount, xb))
-        @test count(s0b) == nb
-        s0ab = @inferred(merge(s0a, s0b))
-        @test count(s0ab) == count(s0)
-        @test s0ab ≈ s0
-        s1a = @inferred(reduce(SampleMean, xa))
-        @test count(s1a) == na
-        s1b = @inferred(reduce(SampleMean, xb))
-        @test count(s1b) == nb
-        s1ab = @inferred(merge(s1a, s1b))
-        @test count(s1ab) == count(s1)
-        @test s1ab ≈ s1
-        s2a = @inferred(reduce(SampleVariance, xa))
-        @test count(s2a) == na
-        s2b = @inferred(reduce(SampleVariance, xb))
-        @test count(s2b) == nb
-        s2ab = @inferred(merge(s2a, s2b))
-        @test count(s2ab) == count(s2)
-        @test s2ab ≈ s2
+        # - change statistics order:
+        ms = @inferred(moments(s))
+        msp = map(a->convert(Tp, a), ms)
+        if M ≥ 0
+            @test @inferred(convert(SampleCount,     s)) === SampleStat{0,T }(n, ())
+            @test @inferred(convert(SampleCount{T},  s)) === SampleStat{0,T }(n, ())
+            @test @inferred(convert(SampleCount{Tp}, s)) === SampleStat{0,Tp}(n, ())
+        end
+        if M ≥ 1
+            @test @inferred(convert(SampleMean,     s)) === SampleStat(n, (ms[1],))
+            @test @inferred(convert(SampleMean{T},  s)) === SampleStat(n, (ms[1],))
+            @test @inferred(convert(SampleMean{Tp}, s)) === SampleStat(n, (msp[1],))
+        end
+        if M ≥ 2
+            @test @inferred(convert(SampleVariance,     s)) === SampleStat(n, (ms[1],ms[2]))
+            @test @inferred(convert(SampleVariance{T }, s)) === SampleStat(n, (ms[1],ms[2]))
+            @test @inferred(convert(SampleVariance{Tp}, s)) === SampleStat(n, (msp[1],msp[2]))
+        end
 
         # TypeUtils methods.
         #
-        @test @inferred(get_precision(s0)) === get_precision(T)
-        @test @inferred(get_precision(s1)) === get_precision(T)
-        @test @inferred(get_precision(s2)) === get_precision(T)
-        @test @inferred(get_precision(s0p)) === get_precision(Tp)
-        @test @inferred(get_precision(s1p)) === get_precision(Tp)
-        @test @inferred(get_precision(s2p)) === get_precision(Tp)
+        @test get_precision(T) === @inferred(get_precision(s))
+        @test get_precision(T) === @inferred(get_precision(typeof(s)))
+        @test get_precision(Tp) === @inferred(get_precision(sp))
+        @test get_precision(Tp) === @inferred(get_precision(typeof(sp)))
         #
-        @test @inferred(adapt_precision(Tp, s0)) === s0p
-        @test @inferred(adapt_precision(Tp, s1)) === s1p
-        @test @inferred(adapt_precision(Tp, s2)) === s2p
-        @test @inferred(adapt_precision(T, s0p)) === s0
-        @test typeof(adapt_precision(T, s0p)) === typeof(s0)
-        @test @inferred(adapt_precision(T, s1p)) ≈ s1
-        @test typeof(adapt_precision(T, s1p)) === typeof(s1)
-        @test @inferred(adapt_precision(T, s2p)) ≈ s2
-        @test typeof(adapt_precision(T, s2p)) === typeof(s2)
+        @test sp === @inferred(adapt_precision(Tp, s))
+
+        # Merge statistics.
+        if M ≤ 2 # TODO Implement for M > 2.
+            xa = view(x, 1:div(length(x),3))
+            na = length(xa)
+            xb = view(x, na+1:length(x))
+            nb = length(xb)
+            sa = @inferred(SampleStat{M,T}(xa))
+            @test count(sa) == na
+            sb = @inferred(SampleStat{M,T}(xb))
+            @test count(sb) == nb
+            @test @inferred(merge(sa, sb)) ≈ s
+            @test @inferred(merge(sa, xb)) ≈ s
+            @test @inferred(merge(sb, sa)) ≈ s
+            @test @inferred(merge(sb, xa)) ≈ s
+            stat = @inferred(typeof(s)())
+            for xᵢ in x
+                stat = @inferred(merge(stat, xᵢ))
+            end
+            @test stat ≈ s
+        else
+            @test_throws ErrorException merge(s, x1)
+        end
+
+        # Common errors.
+        if M == 0
+            @test_throws ErrorException empty(SampleStat{M}) # missing type T
+            # TODO @test_throws AssertionError empty(SampleStat{0x00,T}) # invalid type for M
+            # TODO @test_throws AssertionError empty(SampleStat{-1,T}) # invalid value for M
+        end
+        @test_throws AssertionError empty(SampleStat{M,Int}) # T is not floating-point
     end
 end
