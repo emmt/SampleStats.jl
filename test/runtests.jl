@@ -6,6 +6,18 @@ using Test
 using TypeUtils
 
 @testset "SampleStats" begin
+    struct FakeIter{T,E,S}
+        parent::T
+    end
+    Base.IteratorSize(::Type{FakeIter{T,E,S}}) where {T,E,S} = S()
+    Base.IteratorEltype(::Type{FakeIter{T,E,S}}) where {T,E,S} = E()
+    Base.eltype(::Type{FakeIter{T,E,S}}) where {T,E<:Base.HasEltype,S} = eltype(T)
+    Base.length(iter::FakeIter{T,E,S}) where {T,E,S<:Union{Base.HasLength,Base.HasShape}} = length(iter.parent)
+    Base.size(iter::FakeIter{T,E,S}) where {T,E,S<:Union{Base.HasLength,Base.HasShape}} = size(iter.parent)
+    Base.axes(iter::FakeIter{T,E,S}) where {T,E,S<:Base.HasShape} = axes(iter.parent)
+    Base.iterate(iter::FakeIter) = iterate(iter.parent)
+    Base.iterate(iter::FakeIter, state) = iterate(iter.parent, state)
+
     str(u::TypeUtils.NoUnits) = "none"
     str(u::Any) = string(u)
     brief(::Type{SampleStat{M,T}}) where {M,T} =
@@ -188,6 +200,12 @@ using TypeUtils
         #
         @test e === @inferred(SampleStat{M}(T[]))
         @test u === @inferred(SampleStat{M}([x1]))
+
+        # Sample statistics form fake iterator that doesn't know its length.
+        iter = FakeIter{typeof(x),Base.HasEltype,Base.SizeUnknown}(x)
+        sf = @inferred(SampleStat{M,T}(iter))
+        @test typeof(sf) === typeof(s)
+        @test sf ≈ s
 
         # Compare computed moments with those from `Statistics` or `StatsBase`.
         if M ≥ 1

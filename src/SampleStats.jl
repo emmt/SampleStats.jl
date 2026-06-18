@@ -390,7 +390,7 @@ SampleStat{M,T,V}(x) where {M,T,V} = SampleStat{M,T}(x)::SampleStat{M,T,V} # FIX
         n = Int(length(iter)::Integer)::Int
     else
         n = 0
-        @inbounds @simd for x in iter
+        @inbounds for x in iter
             n += 1
         end
     end
@@ -406,7 +406,7 @@ end
         end
     else
         n = 0
-        @inbounds @simd for x in iter
+        @inbounds for x in iter
             n += 1
             s += oftype(s, x)
         end
@@ -425,14 +425,32 @@ end
     V = typeof(moments_0)
     quote
         $(Expr(:meta, :inline))
-        avg = SampleMean{T}(iter)
-        n = count(avg)
+        s = zero(T)
+        n = 0
+        if Base.IteratorSize(iter) isa Union{Base.HasLength, Base.HasShape}
+            n = Int(length(iter)::Integer)::Int
+            @inbounds @simd for x in iter
+                s += oftype(s, x)
+            end
+        else
+            @inbounds for x in iter
+                n += 1
+                s += oftype(s, x)
+            end
+        end
         n ≥ 1 || return SampleStat{M,T,$V}(n, $(moments_0))
-        μ = avg[1]::T
+        μ = (s/n)::T
         $(init...)
-        @inbounds @simd for x in iter
-            u_1 = convert(T, x - μ)
-            $(update...)
+        if Base.IteratorSize(iter) isa Union{Base.HasLength, Base.HasShape}
+            @inbounds @simd for x in iter
+                u_1 = convert(T, x - μ)
+                $(update...)
+            end
+        else
+            @inbounds for x in iter
+                u_1 = convert(T, x - μ)
+                $(update...)
+            end
         end
         return SampleStat{M,T,$V}(n, $(moments_n))
     end
