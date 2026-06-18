@@ -473,7 +473,7 @@ end
 
 Statistics.std(A::SampleStat; kwds...) = sqrt(var(A; kwds...))
 
-function Statistics.var(A::SampleStat{M}; corrected::Bool=false) where {M}
+function Statistics.var(A::SampleStat{M}; corrected::Bool=true) where {M}
     M ≥ 2 || error("sample statistics does not include variance")
     v = @inbounds A[2]
     if corrected
