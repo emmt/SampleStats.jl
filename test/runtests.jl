@@ -26,7 +26,7 @@ using TypeUtils
         Aqua.test_all(SampleStats)
     end
     @testset "Sample statistics ($(brief(SampleStat{M,T})))" for (M,T) in (
-        (0, Float32), (1, Float32), (2, Float32), (3, Float32), (4, Float32),
+        (0, Float32), (1, Float32), (2, Float32), (3, Float32), (11, Float32),
         )
 
         # Generate data.
@@ -58,15 +58,18 @@ using TypeUtils
         @test_throws ErrorException empty(SampleStat)
         @test ms === @inferred(moments(e))
         @test typeof(ms) === V
-        @test e === @inferred(                typeof(e)(0, ms))
-        @test e === @inferred(          SampleStat{M,T}(0, ms))
+        @test e === @inferred(                typeof(e)( 0, ms))
+        @test e === @inferred(          SampleStat{M,T}( 0, ms))
+        @test_throws ArgumentError      SampleStat{M,T}(-1, ms)
         if M == 0
-            @test_throws ErrorException SampleStat{M}(  0, ms)
-            @test_throws ErrorException SampleStat(     0, ms)
+            @test_throws ErrorException SampleStat{M}(   0, ms)
+            @test_throws ErrorException SampleStat(      0, ms)
         else
-            @test e === @inferred(      SampleStat{M}(  0, ms))
-            @test e === @inferred(      SampleStat(     0, ms))
+            @test e === @inferred(      SampleStat{M}(   0, ms))
+            @test e === @inferred(      SampleStat(      0, ms))
         end
+        @test e === @inferred(          SampleStat{M}(T))
+        @test_throws ErrorException     SampleStat(   T)
         if M == 0
             @test e === @inferred(            SampleCount{T}())
             @test_throws ErrorException       SampleCount(   )
@@ -106,14 +109,15 @@ using TypeUtils
         @test !isempty(u)
         @test ms === @inferred(moments(u))
         @test typeof(ms) === V
-        @test u === @inferred(                typeof(u)(1, ms))
-        @test u === @inferred(          SampleStat{M,T}(1, ms))
+        @test u === @inferred(                typeof(u)( 1, ms))
+        @test u === @inferred(          SampleStat{M,T}( 1, ms))
+        @test_throws ArgumentError      SampleStat{M,T}(-1, ms)
         if M == 0
-            @test_throws ErrorException SampleStat{M}(  1, ms)
-            @test_throws ErrorException SampleStat(     1, ms)
+            @test_throws ErrorException SampleStat{M}(   1, ms)
+            @test_throws ErrorException SampleStat(      1, ms)
         else
-            @test u === @inferred(      SampleStat{M}(  1, ms))
-            @test u === @inferred(      SampleStat(     1, ms))
+            @test u === @inferred(      SampleStat{M}(   1, ms))
+            @test u === @inferred(      SampleStat(      1, ms))
         end
         if M == 0
             @test u === @inferred(      SampleCount{T}(x1))
@@ -172,8 +176,9 @@ using TypeUtils
                 @test ms[k] ≈ moments_x[k]
             end
         end
-        @test s === @inferred(                typeof(s)(n, ms))
-        @test s === @inferred(          SampleStat{M,T}(n, ms))
+        @test s === @inferred(                typeof(s)( n, ms))
+        @test s === @inferred(          SampleStat{M,T}( n, ms))
+        @test_throws ArgumentError      SampleStat{M,T}(-1, ms)
         if M == 0
             @test_throws ErrorException SampleStat{M}(  n, ms)
             @test_throws ErrorException SampleStat(     n, ms)
@@ -215,9 +220,29 @@ using TypeUtils
             @test @inferred(var(s)) ≈ var_x
             @test @inferred(var(s; corrected=true)) ≈ var_x
             @test @inferred(var(s; corrected=false)) ≈ var_x_biased
+            @test @inferred(std(s)) ≈ sqrt(var_x)
+            @test @inferred(std(s; corrected=true)) ≈ sqrt(var_x)
+            @test @inferred(std(s; corrected=false)) ≈ sqrt(var_x_biased)
         end
 
         # Call `reduce` to compute statistics.
+        #
+        # - Compute statistics from a unique observation.
+        @test u === @inferred(      reduce(typeof(u),     x1))
+        @test u === @inferred(      reduce(SampleStat{M}, x1))
+        @test_throws ErrorException reduce(SampleStat,    x1)
+        if M == 0
+            @test u === @inferred(  reduce(SampleCount,    x1))
+            @test u === @inferred(  reduce(SampleCount{T}, x1))
+        elseif M == 1
+            @test u === @inferred(  reduce(SampleMean,    x1))
+            @test u === @inferred(  reduce(SampleMean{T}, x1))
+        elseif M == 2
+            @test u === @inferred(  reduce(SampleVariance,    x1))
+            @test u === @inferred(  reduce(SampleVariance{T}, x1))
+        end
+        #
+        # - Compute statistics from a vector of observations.
         @test s === @inferred(      reduce(typeof(s),     x))
         @test s === @inferred(      reduce(SampleStat{M}, x))
         @test_throws ErrorException reduce(SampleStat,    x)
@@ -363,6 +388,11 @@ using TypeUtils
                 stat = @inferred(merge(stat, xᵢ))
             end
             @test stat ≈ s
+            # Merge a single observation with a different precision.
+            x1p = rand(Tp)
+            sc = @inferred(merge(s, x1p))
+            @test typeof(sc) === typeof(s)
+            @test count(sc) === count(s) + 1
         else
             @test_throws ErrorException merge(s, x1)
         end
