@@ -1,3 +1,5 @@
+module TestingSampleStats
+
 using Aqua
 using SampleStats
 using Statistics
@@ -5,18 +7,19 @@ using StatsBase
 using Test
 using TypeUtils
 
+struct FakeIter{T,E,S}
+    parent::T
+end
+Base.IteratorSize(::Type{FakeIter{T,E,S}}) where {T,E,S} = S()
+Base.IteratorEltype(::Type{FakeIter{T,E,S}}) where {T,E,S} = E()
+Base.eltype(::Type{FakeIter{T,E,S}}) where {T,E<:Base.HasEltype,S} = eltype(T)
+Base.length(iter::FakeIter{T,E,S}) where {T,E,S<:Union{Base.HasLength,Base.HasShape}} = length(iter.parent)
+Base.size(iter::FakeIter{T,E,S}) where {T,E,S<:Union{Base.HasLength,Base.HasShape}} = size(iter.parent)
+Base.axes(iter::FakeIter{T,E,S}) where {T,E,S<:Base.HasShape} = axes(iter.parent)
+Base.iterate(iter::FakeIter) = iterate(iter.parent)
+Base.iterate(iter::FakeIter, state) = iterate(iter.parent, state)
+
 @testset "SampleStats" begin
-    struct FakeIter{T,E,S}
-        parent::T
-    end
-    Base.IteratorSize(::Type{FakeIter{T,E,S}}) where {T,E,S} = S()
-    Base.IteratorEltype(::Type{FakeIter{T,E,S}}) where {T,E,S} = E()
-    Base.eltype(::Type{FakeIter{T,E,S}}) where {T,E<:Base.HasEltype,S} = eltype(T)
-    Base.length(iter::FakeIter{T,E,S}) where {T,E,S<:Union{Base.HasLength,Base.HasShape}} = length(iter.parent)
-    Base.size(iter::FakeIter{T,E,S}) where {T,E,S<:Union{Base.HasLength,Base.HasShape}} = size(iter.parent)
-    Base.axes(iter::FakeIter{T,E,S}) where {T,E,S<:Base.HasShape} = axes(iter.parent)
-    Base.iterate(iter::FakeIter) = iterate(iter.parent)
-    Base.iterate(iter::FakeIter, state) = iterate(iter.parent, state)
 
     str(u::TypeUtils.NoUnits) = "none"
     str(u::Any) = string(u)
@@ -407,3 +410,5 @@ using TypeUtils
         @test_throws AssertionError empty(SampleStat{M,Int}) # T is not floating-point
     end
 end
+
+end # module
