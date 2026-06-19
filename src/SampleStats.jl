@@ -513,8 +513,9 @@ the same type as `A` and represents the sample statistics for the observations i
 those in `B` assuming all these observations are independent.
 
 If `B` is a sample statistics of the same order as `A` or a single observation (i.e. a
-number), `A` and `B` are merged using *online statistics* update formulae (Welford, 1962;
-Pébay et al., 2016). This is useful when new observations arrive continuously.
+number), `A` and `B` are merged using single-pass *pairwise* or *incremental* update
+formulae (Welford, 1962; Bennett et al., 2009). This is useful for parallel computations or
+when new observations arrive continuously.
 
 Otherwise, `B` is assumed to be an iterator (e.g. an array) of observations whose sample
 statistics are computed and then merged with `A` as described above.
@@ -538,66 +539,53 @@ end
 
 @generated function Base.merge(A::S, x::X) where {M,X,S<:SampleStat{M,X}}
     #
-    # The update formula given by Pébay et al. (2016) writes:
+    # Adapted to our definitions of the moments, the single-pass incremental update formula
+    # (III.4) in Bennett et al. (2016) writes:
     #
-    #     μₚ(A ∪ B) = α*[μₚ(A) + (-β*δ)^p] + β*[μₚ(B) + (α*δ)^p]
-    #                 + sum_{k=1}^{p-2} binomial(p,k)*δ^k*(α*μₚ₋ₖ(A)*(-β)^k + β*μₚ₋ₖ(B)*α^k)
+    #     μₚ(C) = α*[μₚ(A) + (-β*δ)^p + sum_{k=1}^{p-2} binomial(p,k)*(-β*δ)^k*μₚ₋ₖ(A)]
+    #           + β*[μₚ(B) + (α*δ)^p]
     #
-    # with:
+    # where last term simplifies to β*(α*δ)^p for p > 1 and with:
     #
-    #     n(A ∪ B) = n(A) + n(B)
-    #     δ = μ₁(B) - μ₁(A)
-    #     α = n(A)/n(A ∪ B)
-    #     β = n(B)/n(A ∪ B)
-    #
-    # Now if `B` is the M-order statistics of a single observation `x`, then:
-    #
+    #     B = {x}
     #     n(B) = 1
     #     μ₁(B) = x
     #     μₖ(B) = 0    (for all k > 1)
     #
-    # Hence the update code can be applied with:
+    # and thus:
     #
-    #     n(A ∪ B) = n(A) + 1
+    #     C = A ∪ {x}
+    #     n(C) = n(A) + 1
     #     δ = x - μ₁(A)
     #     β = 1/(n(A) + 1)
     #     α = n(A)*β
     #
-    # and with the update formula modified to account for `μₖ(B) = k == 1 ? x : 0`.
-    #
     code = Expr[]
     # Pre-compute powers of (α*δ)^k
-    push!(code, :($(Symbol("αδ_1")) = α*δ))
+    αδ = [Symbol("αδ_",k) for k in 1:M] # names of symbols for (α*δ)^k
+    push!(code, :($(αδ[1]) = α*δ))
     for k in 2:M
-        push!(code, :($(Symbol("αδ_",k)) = $(Symbol("αδ_",k÷2))*$(Symbol("αδ_",k-k÷2))))
+        push!(code, :($(αδ[k]) = $(αδ[k÷2])*$(αδ[k-k÷2])))
     end
-    #Pre-compute powers of (-β*δ)^k
-    push!(code, :($(Symbol("βδ_1")) = -β*δ))
+    # Pre-compute powers of (-β*δ)^k
+    βδ = [Symbol("βδ_",k) for k in 1:M]  # names of symbols for (-β*δ)^k
+    push!(code, :($(βδ[1]) = -β*δ))
     for k in 2:M
-        push!(code, :($(Symbol("βδ_",k)) = $(Symbol("βδ_",k÷2))*$(Symbol("βδ_",k-k÷2))))
+        push!(code, :($(βδ[k]) = $(βδ[k÷2])*$(βδ[k-k÷2])))
     end
     # Push merge expressions for μ_2, ..., μ_M
     for p in 2:M
-        # Build right-hand side expression.
-        rhs = Expr(:call, :+)
-        push!(rhs.args, :(α*(A[$p] + $(Symbol("βδ_",p)))))
-        push!(rhs.args, :(β*$(Symbol("αδ_",p))))
+        # Build μₚ(A) + (-β*δ)^p + sum_{k=1}^{p-2} binomial(p,k)*(-β*δ)^k*μₚ₋ₖ(A)
+        ex = :(A[$p] + $(βδ[p]))
         if p > 2
-            # Build sum expression.
+            # Build sum_{k=1}^{p-2} binomial(p,k)*(-β*δ)^k*μₚ₋ₖ(A)
             sum = Expr(:call, :+)
             for k in 1:p-2
-                if p-k == 1
-                    push!(sum.args, :($(binomial(p,k))*(
-                        #==#   α*A[$(p-k)]*$(Symbol("βδ_",k))
-                        #==# + β*x*$(Symbol("αδ_",k)))))
-                else
-                    push!(sum.args, :($(binomial(p,k))*(
-                        #==#   α*A[$(p-k)]*$(Symbol("βδ_",k)))))
-                end
+                push!(sum.args, :($(binomial(p,k))*$(βδ[k])*A[$(p-k)]))
             end
-            push!(rhs.args, sum)
+            push!(ex.args, sum)
         end
-        push!(code, :($(Symbol("μ_",p)) = $(rhs)))
+        push!(code, :($(Symbol("μ_",p)) = α*$(ex) + β*$(αδ[p])))
     end
     moments = Expr(:tuple, ntuple(k -> Symbol("μ_",k), Val(M))...)
     quote
@@ -681,51 +669,58 @@ end
 
 @generated function Base.merge(A::S, B::S) where {M,S<:SampleStat{M}}
     #
-    # The following update formula is given by Pébay et al. (2016):
+    # Adapted to our definitions of the moments, the single-pass pairwise update formula
+    # (III.1) in Bennett et al. (2016) writes:
     #
-    #     Mₚ(A ∪ B) = Mₚ(A) + Mₚ(B) + nA*(-β*δ)^p + nB*(α*δ)^p
-    #                 + sum_{k=1}^{p-2} binomial(p,k)*δ^k*(Mₚ₋ₖ(A)*(-β)^k + Mₚ₋ₖ(B)*α^k)
+    #     μₚ(C) = α*[μₚ(A) + (-β*δ)^p] + β*[μₚ(B) + (α*δ)^p]
+    #             + sum_{k=1}^{p-2} binomial(p,k)*[(-β*δ)^k*α*μₚ₋ₖ(A) + (α*δ)^k*β*μₚ₋ₖ(B)]
     #
-    # where Mₚ(X) = n(X)*μₚ(X) and:
+    # in 7p - 3 operations (not counting pre-computed powers and binomial coefficients)
+    # which can be put in an "interpolation form":
     #
-    #     n(A ∪ B) = n(A) + n(B)
+    #     μₚ(C) = α*[μₚ(A) + (-β*δ)^p + sum_{k=1}^{p-2} binomial(p,k)*(-β*δ)^k*μₚ₋ₖ(A)]
+    #           + β*[μₚ(B) + ( α*δ)^p + sum_{k=1}^{p-2} binomial(p,k)*( α*δ)^k*μₚ₋ₖ(B)]
+    #
+    # in 6p - 7 operations and with:
+    #
+    #     C = A ∪ B)
+    #     n(C) = n(A) + n(B)
     #     δ = μ₁(B) - μ₁(A)
     #     α = n(A)/n(A ∪ B)
     #     β = n(B)/n(A ∪ B)
     #
-    # Hence, dividing every terms by n(A ∪ B) yields:
-    #
-    #     μₚ(A ∪ B) = α*[μₚ(A) + (-β*δ)^p] + β*[μₚ(B) + (α*δ)^p]
-    #                 + sum_{k=1}^{p-2} binomial(p,k)*δ^k*(α*μₚ₋ₖ(A)*(-β)^k + β*μₚ₋ₖ(B)*α^k)
+    # TODO The sums should be computed in such an order to minimize the propagation of
+    #      rounding errors.
     #
     code = Expr[]
     # Pre-compute powers of (α*δ)^k
-    push!(code, :($(Symbol("αδ_1")) = α*δ))
+    αδ = [Symbol("αδ_",k) for k in 1:M] # names of symbols for (α*δ)^k
+    push!(code, :($(αδ[1]) = α*δ))
     for k in 2:M
-        push!(code, :($(Symbol("αδ_",k)) = $(Symbol("αδ_",k÷2))*$(Symbol("αδ_",k-k÷2))))
+        push!(code, :($(αδ[k]) = $(αδ[k÷2])*$(αδ[k-k÷2])))
     end
-    #Pre-compute powers of (-β*δ)^k
-    push!(code, :($(Symbol("βδ_1")) = -β*δ))
+    # Pre-compute powers of (-β*δ)^k
+    βδ = [Symbol("βδ_",k) for k in 1:M]  # names of symbols for (-β*δ)^k
+    push!(code, :($(βδ[1]) = -β*δ))
     for k in 2:M
-        push!(code, :($(Symbol("βδ_",k)) = $(Symbol("βδ_",k÷2))*$(Symbol("βδ_",k-k÷2))))
+        push!(code, :($(βδ[k]) = $(βδ[k÷2])*$(βδ[k-k÷2])))
     end
     # Push merge expressions for μ_2, ..., μ_M
     for p in 2:M
-        # Build right-hand side expression.
-        rhs = Expr(:call, :+)
-        push!(rhs.args, :(α*(A[$p] + $(Symbol("βδ_",p)))))
-        push!(rhs.args, :(β*(B[$p] + $(Symbol("αδ_",p)))))
+        exA = :(A[$p] + $(βδ[p]))
+        exB = :(B[$p] + $(αδ[p]))
         if p > 2
-            # Build sum expression.
-            sum = Expr(:call, :+)
+            # Build sum_{k=1}^{p-2} binomial(p,k)*(-β*δ)^k*μₚ₋ₖ(A)
+            # and   sum_{k=1}^{p-2} binomial(p,k)*(α*δ)^k*μₚ₋ₖ(B)
+            push!(exA.args, Expr(:call, :+))
+            push!(exB.args, Expr(:call, :+))
             for k in 1:p-2
-                push!(sum.args, :($(binomial(p,k))*(
-                    #==#   α*A[$(p-k)]*$(Symbol("βδ_",k))
-                    #==# + β*B[$(p-k)]*$(Symbol("αδ_",k)))))
+                w = binomial(p,k)
+                push!(exA.args[end].args, :($w*$(βδ[k])*A[$(p-k)]))
+                push!(exB.args[end].args, :($w*$(αδ[k])*B[$(p-k)]))
             end
-            push!(rhs.args, sum)
         end
-        push!(code, :($(Symbol("μ_",p)) = $(rhs)))
+        push!(code, :($(Symbol("μ_",p)) = α*$(exA) + β*$(exB)))
     end
     moments = Expr(:tuple, ntuple(k -> Symbol("μ_",k), Val(M))...)
     quote
