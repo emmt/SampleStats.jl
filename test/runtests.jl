@@ -370,32 +370,33 @@ using TypeUtils
         @test sp === @inferred(adapt_precision(Tp, s))
 
         # Merge statistics.
-        if M ≤ 2 # TODO Implement for M > 2.
-            xa = view(x, 1:div(length(x),3))
-            na = length(xa)
-            xb = view(x, na+1:length(x))
-            nb = length(xb)
-            sa = @inferred(SampleStat{M,T}(xa))
-            @test count(sa) == na
-            sb = @inferred(SampleStat{M,T}(xb))
-            @test count(sb) == nb
-            @test @inferred(merge(sa, sb)) ≈ s
-            @test @inferred(merge(sa, xb)) ≈ s
-            @test @inferred(merge(sb, sa)) ≈ s
-            @test @inferred(merge(sb, xa)) ≈ s
-            stat = @inferred(typeof(s)())
-            for xᵢ in x
-                stat = @inferred(merge(stat, xᵢ))
-            end
-            @test stat ≈ s
-            # Merge a single observation with a different precision.
-            x1p = rand(Tp)
-            sc = @inferred(merge(s, x1p))
-            @test typeof(sc) === typeof(s)
-            @test count(sc) === count(s) + 1
-        else
-            @test_throws ErrorException merge(s, x1)
+        xa = view(x, 1:div(length(x),3))
+        na = length(xa)
+        xb = view(x, na+1:length(x))
+        nb = length(xb)
+        sa = @inferred(SampleStat{M,T}(xa))
+        @test count(sa) == na
+        sb = @inferred(SampleStat{M,T}(xb))
+        @test count(sb) == nb
+        @test @inferred(merge(sa, sb)) ≈ s # merge 2 sample statistics
+        @test @inferred(merge(sa, xb)) ≈ s # merge a sample statistics with observations
+        @test @inferred(merge(sb, sa)) ≈ s # merge 2 sample statistics
+        @test @inferred(merge(sb, xa)) ≈ s # merge a sample statistics with observations
+        stat = @inferred(typeof(s)())
+        for xᵢ in x
+            stat = @inferred(merge(stat, xᵢ)) # merge a sample statistics with one observation
         end
+        @test stat ≈ s
+        # Merge a single observation with a different precision.
+        x1p = rand(Tp)
+        sc = @inferred(merge(s, x1p))
+        @test typeof(sc) === typeof(s)
+        @test count(sc) === count(s) + 1
+        # Merge sample statistics of higher order and different precision.
+        sbp = @inferred(SampleStat{M+1,Tp}(xb))
+        stat = @inferred(merge(sa, sbp))
+        @test typeof(stat) === typeof(sa)
+        @test stat ≈ s
 
         # Common errors.
         if M == 0

@@ -504,43 +504,142 @@ function Statistics.var(A::SampleStat{M}; corrected::Bool=true) where {M}
 end
 
 # NOTE `merge(A::SampleStat, B)` returns an object of same type as `A`.
-@inline function Base.merge(A::SampleStat{M,T}, x::Number) where {M,T<:Number}
-    return merge(A, convert(T, x)::T)
+#
+"""
+    merge(A::SampleStat, B) -> C::typeof(A)
+
+Merge sample statistics `A` with observation(s) or sample statistics `B`. The result `C` has
+the same type as `A` and represents the sample statistics for the observations in `A` plus
+those in `B` assuming all these observations are independent.
+
+If `B` is a sample statistics of the same order as `A` or a single observation (i.e. a
+number), `A` and `B` are merged using *online statistics* update formulae (Welford, 1962;
+Pébay et al., 2016). This is useful when new observations arrive continuously.
+
+Otherwise, `B` is assumed to be an iterator (e.g. an array) of observations whose sample
+statistics are computed and then merged with `A` as described above.
+
+"""
+function Base.merge(A::SampleStat, B)
+    if B isa Number
+        # Ensure compatibility of single observation `B` by converting it to the type of
+        # observations in `A`.
+        return merge(A, convert(obstype(A), B)::obstype(A))
+    elseif B isa SampleStat
+        # Ensure compatibility of observations by converting `B` to same type as `A`.
+        order(B) ≥ order(A) || throw(ArgumentError(
+            "other sample statistics must of order ≥ $(order(A)), got $(order(A))-order sample statistics"))
+        return merge(A, convert(typeof(A), B)::typeof(A))
+    else
+        # Fallback method, assume `B` is an iterator whose elements are observations.
+        return merge(A, reduce(typeof(A), B)::typeof(A))
+    end
 end
 
-@noinline Base.merge(A::SampleStat{M,T}, x::T) where {M,T<:Number} =
-    error("merge $M-order sample statistics and number not implemented")
-
-@inline function Base.merge(A::SampleStat{0,T,V}, x::T) where {T<:Number,V}
-    return SampleStat{0,T,V}(count(A) + 1, ())
+@generated function Base.merge(A::S, x::X) where {M,X,S<:SampleStat{M,X}}
+    #
+    # The update formula given by Pébay et al. (2016) writes:
+    #
+    #     μₚ(A ∪ B) = α*[μₚ(A) + (-β*δ)^p] + β*[μₚ(B) + (α*δ)^p]
+    #                 + sum_{k=1}^{p-2} binomial(p,k)*δ^k*(α*μₚ₋ₖ(A)*(-β)^k + β*μₚ₋ₖ(B)*α^k)
+    #
+    # with:
+    #
+    #     n(A ∪ B) = n(A) + n(B)
+    #     δ = μ₁(B) - μ₁(A)
+    #     α = n(A)/n(A ∪ B)
+    #     β = n(B)/n(A ∪ B)
+    #
+    # Now if `B` is the M-order statistics of a single observation `x`, then:
+    #
+    #     n(B) = 1
+    #     μ₁(B) = x
+    #     μₖ(B) = 0    (for all k > 1)
+    #
+    # Hence the update code can be applied with:
+    #
+    #     n(A ∪ B) = n(A) + 1
+    #     δ = x - μ₁(A)
+    #     β = 1/(n(A) + 1)
+    #     α = n(A)*β
+    #
+    # and with the update formula modified to account for `μₖ(B) = k == 1 ? x : 0`.
+    #
+    code = Expr[]
+    # Pre-compute powers of (α*δ)^k
+    push!(code, :($(Symbol("αδ_1")) = α*δ))
+    for k in 2:M
+        push!(code, :($(Symbol("αδ_",k)) = $(Symbol("αδ_",k÷2))*$(Symbol("αδ_",k-k÷2))))
+    end
+    #Pre-compute powers of (-β*δ)^k
+    push!(code, :($(Symbol("βδ_1")) = -β*δ))
+    for k in 2:M
+        push!(code, :($(Symbol("βδ_",k)) = $(Symbol("βδ_",k÷2))*$(Symbol("βδ_",k-k÷2))))
+    end
+    # Push merge expressions for μ_2, ..., μ_M
+    for p in 2:M
+        # Build right-hand side expression.
+        rhs = Expr(:call, :+)
+        push!(rhs.args, :(α*(A[$p] + $(Symbol("βδ_",p)))))
+        push!(rhs.args, :(β*$(Symbol("αδ_",p))))
+        if p > 2
+            # Build sum expression.
+            sum = Expr(:call, :+)
+            for k in 1:p-2
+                if p-k == 1
+                    push!(sum.args, :($(binomial(p,k))*(
+                        #==#   α*A[$(p-k)]*$(Symbol("βδ_",k))
+                        #==# + β*x*$(Symbol("αδ_",k)))))
+                else
+                    push!(sum.args, :($(binomial(p,k))*(
+                        #==#   α*A[$(p-k)]*$(Symbol("βδ_",k)))))
+                end
+            end
+            push!(rhs.args, sum)
+        end
+        push!(code, :($(Symbol("μ_",p)) = $(rhs)))
+    end
+    moments = Expr(:tuple, ntuple(k -> Symbol("μ_",k), Val(M))...)
+    quote
+        $(Expr(:meta, :inline))
+        T = get_precision(X)
+        nA = count(A)
+        n = nA + 1
+        β = (one(T)/n)::T
+        α = (nA*β)::T
+        μ_1 = (α*A[1] + β*x)::T
+        δ = (x - A[1])::T
+        $(code...)
+        return S(n, $moments)
+    end
 end
 
-@inline function Base.merge(A::SampleStat{1,T,V}, x::T) where {T<:Number,V}
+@inline function Base.merge(A::S, x::T) where {T,S<:SampleCount{T}}
+    return S(count(A) + 1, ()) # directly call inner constructor
+end
+
+@inline function Base.merge(A::S, x::T) where {T,S<:SampleMean{T}}
     n, μ = count(A), A[1]
     u = (x - μ)/(n + 1)
-    return SampleStat{1,T,V}(n + 1, (μ + u,))
+    return S(n + 1, (μ + u,)) # directly call inner constructor
 end
 
-@inline function Base.merge(A::SampleStat{2,T,V}, x::T) where {T<:Number,V}
+@inline function Base.merge(A::S, x::T) where {T,S<:SampleVariance{T}}
     # Update sample mean and variance using recurrence rules similar to those given by
     # Welford (1962).
     n, μ, v = count(A), A[1], A[2]
     u = (x - μ)/(n + 1)
-    return SampleStat{2,T,V}(n + 1, (μ + u, n*(v/(n + 1) + u*u)))
+    return S(n + 1, (μ + u, n*(v/(n + 1) + u*u))) # directly call inner constructor
 end
 
-function Base.merge(A::SampleStat{M,T}, iter) where {M,T}
-    return merge(A, SampleStat{M,T}(iter))
+@inline function Base.merge(A::S, B::S) where {S<:SampleCount}
+    return S(count(A) + count(B), ()) # directly call inner constructor
 end
 
-@inline function Base.merge(A::SampleCount, B::SampleCount)
-    return typeof(A)(count(A) + count(B), ()) # directly call inner constructor
-end
-
-@inline function Base.merge(A::SampleMean, B::SampleMean)
-    T = get_precision(A)
-    nA, μA = count(A), adapt_precision(T, A[1])
-    nB, μB = count(B), adapt_precision(T, B[1])
+@inline function Base.merge(A::S, B::S) where {S<:SampleMean}
+    T = get_precision(S)
+    nA, μA = count(A), A[1]
+    nB, μB = count(B), B[1]
     #
     # Merging of the mean:
     #
@@ -553,14 +652,13 @@ end
     α = (T(nA)/n)::T
     β = (T(nB)/n)::T
     μ = α*μA + β*μB
-    return typeof(A)(n, (μ,)) # directly call inner constructor
+    return S(n, (μ,)) # directly call inner constructor
 end
 
-@inline function Base.merge(A::SampleVariance, B::SampleVariance)
-    T = get_precision(A)
-    nA, μA, vA = count(A), adapt_precision(T, A[1]), adapt_precision(T, A[2])
-    nB, μB, vB = count(B), adapt_precision(T, B[1]), adapt_precision(T, B[2])
-
+@inline function Base.merge(A::S, B::S) where {S<:SampleVariance}
+    T = get_precision(S)
+    nA, μA, vA = count(A), A[1], A[2]
+    nB, μB, vB = count(B), B[1], B[2]
     n = nA + nB
     α = (T(nA)/n)::T
     β = (T(nB)/n)::T
@@ -578,15 +676,76 @@ end
     # `β*(μA - μB)² ≈ β*σ²*(1/nA + 1/nB) ≈ σ²/n` `vA ≈ σ²` to `vA ≈ σ²`:
     #
     v = α*(vA + β*(μB - μA)^2) + β*vB
-    return typeof(A)(n, (μ, v)) # directly call inner constructor
+    return S(n, (μ, v)) # directly call inner constructor
 end
 
-@noinline function Base.merge(A::SampleStat, B::SampleStat)
-    A_str = "A::SampleStat{$(order(A)),$(obstype(A))}"
-    B_str = "B::SampleStat{$(order(B)),$(obstype(B))}"
-    error("`merge(A,B)` not implemented for `$A_str` and `$B_str`")
+@generated function Base.merge(A::S, B::S) where {M,S<:SampleStat{M}}
+    #
+    # The following update formula is given by Pébay et al. (2016):
+    #
+    #     Mₚ(A ∪ B) = Mₚ(A) + Mₚ(B) + nA*(-β*δ)^p + nB*(α*δ)^p
+    #                 + sum_{k=1}^{p-2} binomial(p,k)*δ^k*(Mₚ₋ₖ(A)*(-β)^k + Mₚ₋ₖ(B)*α^k)
+    #
+    # where Mₚ(X) = n(X)*μₚ(X) and:
+    #
+    #     n(A ∪ B) = n(A) + n(B)
+    #     δ = μ₁(B) - μ₁(A)
+    #     α = n(A)/n(A ∪ B)
+    #     β = n(B)/n(A ∪ B)
+    #
+    # Hence, dividing every terms by n(A ∪ B) yields:
+    #
+    #     μₚ(A ∪ B) = α*[μₚ(A) + (-β*δ)^p] + β*[μₚ(B) + (α*δ)^p]
+    #                 + sum_{k=1}^{p-2} binomial(p,k)*δ^k*(α*μₚ₋ₖ(A)*(-β)^k + β*μₚ₋ₖ(B)*α^k)
+    #
+    code = Expr[]
+    # Pre-compute powers of (α*δ)^k
+    push!(code, :($(Symbol("αδ_1")) = α*δ))
+    for k in 2:M
+        push!(code, :($(Symbol("αδ_",k)) = $(Symbol("αδ_",k÷2))*$(Symbol("αδ_",k-k÷2))))
+    end
+    #Pre-compute powers of (-β*δ)^k
+    push!(code, :($(Symbol("βδ_1")) = -β*δ))
+    for k in 2:M
+        push!(code, :($(Symbol("βδ_",k)) = $(Symbol("βδ_",k÷2))*$(Symbol("βδ_",k-k÷2))))
+    end
+    # Push merge expressions for μ_2, ..., μ_M
+    for p in 2:M
+        # Build right-hand side expression.
+        rhs = Expr(:call, :+)
+        push!(rhs.args, :(α*(A[$p] + $(Symbol("βδ_",p)))))
+        push!(rhs.args, :(β*(B[$p] + $(Symbol("αδ_",p)))))
+        if p > 2
+            # Build sum expression.
+            sum = Expr(:call, :+)
+            for k in 1:p-2
+                push!(sum.args, :($(binomial(p,k))*(
+                    #==#   α*A[$(p-k)]*$(Symbol("βδ_",k))
+                    #==# + β*B[$(p-k)]*$(Symbol("αδ_",k)))))
+            end
+            push!(rhs.args, sum)
+        end
+        push!(code, :($(Symbol("μ_",p)) = $(rhs)))
+    end
+    moments = Expr(:tuple, ntuple(k -> Symbol("μ_",k), Val(M))...)
+    quote
+        $(Expr(:meta, :inline))
+        T = get_precision(S)
+        nA = count(A)
+        nB = count(B)
+        # NOTE We could implement the following shortcut but this would imply branch and
+        #      thus prevent vectorization:
+        #          nA > 0 || return B
+        #          nB > 0 || return A
+        n = nA + nB
+        α = (T(nA)/n)::T
+        β = (T(nB)/n)::T
+        μ_1 = (α*A[1] + β*B[1])::T
+        δ = (B[1] - A[1])::T
+        $(code...)
+        return S(n, $moments)
+    end
 end
-
 
 # Extend `Base.reduce`, the many methods are needed to avoid ambiguities.
 Base.reduce(::Type{S}, x::Number) where {S<:SampleStat} = S(x)
