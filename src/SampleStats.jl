@@ -537,6 +537,126 @@ function Base.merge(A::SampleStat, B)
     end
 end
 
+@inline function Base.merge(A::S, x::X) where {X,S<:SampleCount{X}}
+    return S(count(A) + 1, ()) # call inner constructor
+end
+
+@inline function Base.merge(A::S, B::S) where {S<:SampleCount}
+    return S(count(A) + count(B), ()) # call inner constructor
+end
+
+# Merging of the mean (pairwise update formulae):
+#
+#     n = nA + nB
+#     α = nA/n
+#     β = nB/n
+#     μ = α*μA + β*μB            (6 ops.)
+#       = μA + β*(μB - μA)   [*] (5 ops., no needs to compute α)
+#       = μB - α*(μB - μA)       (5 ops., no needs to compute β)
+#
+# [*] is the one implemented.
+#
+# When B = {x}, nB = 1 and μB = x, then (incremental udate formulae):
+#
+#     n = nA + 1
+#     α = nA/n
+#     β = 1/n
+#     μ = α*μA + β*x             (6 ops. but "symmetric")
+#       = μA + β*(x - μA)    [*] (5 ops., no needs to compute α)
+#       = μA + (x - μA)/n        (4 ops., no needs to compute α nor β)
+#       = x - α*(x - μA)         (5 ops., no needs to compute β)
+#
+# [*] is the fastest version, nearly by a factor of 2, on my CPU (Intel Core i7-13800H),
+# perhaps because multiplying by the reciprocal of n is faster than divided by n or because
+# replacing the division by a multiplication opens the possibility of an FMA (fused multiply
+# and add) operation.
+#
+@inline function Base.merge(A::S, x::X) where {X,S<:SampleMean{X}}
+    T = get_precision(S)
+    n = count(A) + 1
+    β = 1/T(n)
+    μ = A[1]
+    return S(n, (μ + β*(x - μ),)) # call inner constructor
+end
+
+@inline function Base.merge(A::S, B::S) where {S<:SampleMean}
+    T = get_precision(S)
+    nA = count(A)
+    nB = count(B)
+    n = nA + nB
+    β = (nB/T(n))::T
+    μA = A[1]
+    μB = B[1]
+    return S(n, (μA + β*(μB - μA),)) # call inner constructor
+end
+
+# A simple expression for the merged variance which is nonnegative (in 9 ops.):
+#
+#     μ₂(C) = α*(μ₂(A) + (μ₁(A) - μ₁(C))^2) + β*(μ₂(B) + (μ₁(B) - μ₁(C))^2)
+#
+# Another version derived from Bennett et al. (2008) is also nonnegative (in 8 ops.):
+#
+#     μ₂(C) = α*μ₂(A) + β*μ₂(B) + α*β*(μ₁(B) - μ₁(A))^2
+#
+# factorization saves one operation and adds a small correction ≈ σ²/n to one of the
+# variances:
+#
+#     μ₂(C) = α*(μ₂(A) + β*(μ₁(B) - μ₁(A))^2) + β*μ₂(B)
+#
+# The incremental version (when B = {x}, nB = 1, μ₁(B) = x, and μ₂(B) = 0) writes:
+#
+#     μ₂(C) = α*(μ₂(A) + β*(x - μ₁(A))^2)
+#
+# A similar incremental update formula for the variance can be found following Welford
+# (1962).
+#
+# The incremental update rules for the sample mean and variance write:
+#
+#     nC = nA + 1
+#     β = 1/nC
+#     δμ = β*(x - μ₁(A))
+#     μ₁(C) = μ₁(A) + δμ
+#     μ₂(C) = (β*μ₂(A) + δμ^2)*nA
+#
+# in 9 operations. Another version is given by:
+#
+#     nC = nA + 1
+#     δμ = (x - μ₁(A))/nC
+#     μ₁(C) = μ₁(A) + δμ
+#     μ₂(C) = (μ₂(A)/nC + δμ^2)*nA
+#
+# which saves 1 operation (hence in 8 operations) but with 2 divisions. The two versions are
+# equally fast.
+
+@inline function Base.merge(A::S, x::X) where {X,S<:SampleVariance{X}}
+    T = get_precision(S)
+    nA = count(A)
+    nC = nA + 1
+    μA = A[1]
+    @static if false
+        # Version 1:
+        δμ = (x - μA)/nC
+        return S(nC, (μA + δμ, (A[2]/nC + δμ^2)*nA)) # call inner constructor
+    else
+        # Version 2:
+        β = 1/T(nC)
+        δμ = β*(x - μA)
+        return S(nC, (μA + δμ, (β*A[2] + δμ^2)*nA)) # call inner constructor
+    end
+end
+
+@inline function Base.merge(A::S, B::S) where {S<:SampleVariance}
+    T = get_precision(S)
+    nA = count(A)
+    nB = count(B)
+    n = nA + nB
+    α = (T(nA)/n)::T
+    β = (T(nB)/n)::T
+    μA = A[1]
+    μB = B[1]
+    return S(n, (α*μA + β*μB, α*(A[2] + β*(μB - μA)^2) + β*B[2])) # call inner constructor
+end
+
 @generated function Base.merge(A::S, x::X) where {M,X,S<:SampleStat{M,X}}
     #
     # Adapted to our definitions of the moments, the single-pass incremental update formula
@@ -600,71 +720,6 @@ end
         $(code...)
         return S(n, $moments)
     end
-end
-
-@inline function Base.merge(A::S, x::T) where {T,S<:SampleCount{T}}
-    return S(count(A) + 1, ()) # directly call inner constructor
-end
-
-@inline function Base.merge(A::S, x::T) where {T,S<:SampleMean{T}}
-    n, μ = count(A), A[1]
-    u = (x - μ)/(n + 1)
-    return S(n + 1, (μ + u,)) # directly call inner constructor
-end
-
-@inline function Base.merge(A::S, x::T) where {T,S<:SampleVariance{T}}
-    # Update sample mean and variance using recurrence rules similar to those given by
-    # Welford (1962).
-    n, μ, v = count(A), A[1], A[2]
-    u = (x - μ)/(n + 1)
-    return S(n + 1, (μ + u, n*(v/(n + 1) + u*u))) # directly call inner constructor
-end
-
-@inline function Base.merge(A::S, B::S) where {S<:SampleCount}
-    return S(count(A) + count(B), ()) # directly call inner constructor
-end
-
-@inline function Base.merge(A::S, B::S) where {S<:SampleMean}
-    T = get_precision(S)
-    nA, μA = count(A), A[1]
-    nB, μB = count(B), B[1]
-    #
-    # Merging of the mean:
-    #
-    #    n = nA + nB                   (1 op.)
-    #    μ = (nA/n)*μA + (nB/n)*μB     (+ 5 ops. but "symmetric")
-    #      = μA + (nB/n)*(μB - μA)     (+ 4 ops.)
-    #      = μB + (nA/n)*(μA - μB)     (+ 4 ops.)
-    #
-    n = nA + nB
-    α = (T(nA)/n)::T
-    β = (T(nB)/n)::T
-    μ = α*μA + β*μB
-    return S(n, (μ,)) # directly call inner constructor
-end
-
-@inline function Base.merge(A::S, B::S) where {S<:SampleVariance}
-    T = get_precision(S)
-    nA, μA, vA = count(A), A[1], A[2]
-    nB, μB, vB = count(B), B[1], B[2]
-    n = nA + nB
-    α = (T(nA)/n)::T
-    β = (T(nB)/n)::T
-    μ = α*μA + β*μB
-    #
-    # A simple expression for the merged variance which is nonnegative (in 9 ops.):
-    #
-    #     v = α*(vA + (μA - μ)^2) + β*(vB + (μB - μ)^2)
-    #
-    # Another version proposed by Pébay et al. (2016) is also nonnegative (in 8 ops.):
-    #
-    #     v = α*vA + β*vB + α*β*(μA - μB)^2
-    #
-    # factorization saves one operation and adds a small correction
-    # `β*(μA - μB)² ≈ β*σ²*(1/nA + 1/nB) ≈ σ²/n` `vA ≈ σ²` to `vA ≈ σ²`:
-    #
-    v = α*(vA + β*(μB - μA)^2) + β*vB
-    return S(n, (μ, v)) # directly call inner constructor
 end
 
 @generated function Base.merge(A::S, B::S) where {M,S<:SampleStat{M}}
