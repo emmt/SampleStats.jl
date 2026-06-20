@@ -529,7 +529,7 @@ function Base.merge(A::SampleStat, B)
     elseif B isa SampleStat
         # Ensure compatibility of observations by converting `B` to same type as `A`.
         order(B) ≥ order(A) || throw(ArgumentError(
-            "other sample statistics must of order ≥ $(order(A)), got $(order(A))-order sample statistics"))
+            "other sample statistics must of order ≥ $(order(A)), got $(order(B))-order sample statistics"))
         return merge(A, convert(typeof(A), B)::typeof(A))
     else
         # Fallback method, assume `B` is an iterator whose elements are observations.
