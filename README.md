@@ -123,6 +123,10 @@ derived by:
   Products"*, Technometrics **4**, 419-420.
   [DOI](https://doi.org/10.1080/00401706.1962.10490022)
 
+- D. N. Joanes and C. A. Gill, 1998, *"Comparing measures of sample skewness and kurtosis"*,
+  Journal of the Royal Statistical Society: Series D (The Statistician) **47**, pp. 183-189.
+  [DOI](https://doi.org/10.1111/1467-9884.00122)
+
 - J. Bennett, R. Grout, P. Pebay, D. Roe, and D. Thompson, 2009, *"Numerically stable,
   single-pass, parallel statistics algorithms"*, IEEE International Conference on Cluster
   Computing and Workshops. [DOI](https://doi.org/10.1109/CLUSTR.2009.5289161)
