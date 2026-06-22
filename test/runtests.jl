@@ -19,18 +19,19 @@ Base.axes(iter::FakeIter{T,E,S}) where {T,E,S<:Base.HasShape} = axes(iter.parent
 Base.iterate(iter::FakeIter) = iterate(iter.parent)
 Base.iterate(iter::FakeIter, state) = iterate(iter.parent, state)
 
+str(u::TypeUtils.NoUnits) = "none"
+str(u::Any) = string(u)
+brief(::Type{SampleStat{M,T}}) where {M,T} =
+    "order: $M, precision: $(get_precision(T)), units: $(str(units_of(T)))"
+
 @testset "SampleStats" begin
 
-    str(u::TypeUtils.NoUnits) = "none"
-    str(u::Any) = string(u)
-    brief(::Type{SampleStat{M,T}}) where {M,T} =
-        "order: $M, precision: $(get_precision(T)), units: $(str(units_of(T)))"
     @testset "Code quality (Aqua)" begin
         Aqua.test_all(SampleStats)
     end
+
     @testset "Sample statistics ($(brief(SampleStat{M,T})))" for (M,T) in (
-        (0, Float32), (1, Float32), (2, Float32), (3, Float32), (11, Float32),
-        )
+        (0, Float32), (1, Float32), (2, Float32), (3, Float32), (4, Float32), (11, Float32),)
 
         # Generate data.
         Tp = adapt_precision(get_precision(T) != Float32 ? Float32 : Float64, T)
@@ -50,15 +51,22 @@ Base.iterate(iter::FakeIter, state) = iterate(iter.parent, state)
         @test T === @inferred(obstype(e))
         @test 0 === @inferred(count(e))
         @test 0 === @inferred(nobs(e))
-        @test e === @inferred(          typeof(e)())
-        @test_throws ErrorException SampleStat{M}()
-        @test_throws ErrorException SampleStat(   )
         @test isempty(e)
         @test e === @inferred(      empty(e))
         @test e === @inferred(      empty(typeof(e)))
         @test e === @inferred(      empty(SampleStat{M,T}))
         @test_throws ErrorException empty(SampleStat{M})
         @test_throws ErrorException empty(SampleStat)
+        # Rebuild same sample statistics from itself.
+        @test e === @inferred(          typeof(e)(e))
+        @test e === @inferred(    SampleStat{M,T}(e))
+        @test e === @inferred(    SampleStat{M}(  e))
+        @test e === @inferred(    SampleStat(     e))
+        # Rebuild same sample statistics from same observation(s).
+        @test e === @inferred(          typeof(e)())
+        @test_throws ErrorException SampleStat{M}()
+        @test_throws ErrorException SampleStat(   )
+        # Rebuild same sample statistics from moments.
         @test ms === @inferred(moments(e))
         @test typeof(ms) === V
         @test e === @inferred(                typeof(e)( 0, ms))
@@ -106,10 +114,17 @@ Base.iterate(iter::FakeIter, state) = iterate(iter.parent, state)
         @test T === @inferred(obstype(u))
         @test 1 === @inferred(count(u))
         @test 1 === @inferred(nobs(u))
+        @test !isempty(u)
+        # Rebuild same sample statistics from itself.
+        @test u === @inferred(          typeof(u)(u))
+        @test u === @inferred(    SampleStat{M,T}(u))
+        @test u === @inferred(    SampleStat{M}(  u))
+        @test u === @inferred(    SampleStat(     u))
+        # Rebuild same sample statistics from same observation(s).
         @test u === @inferred(          typeof(u)(x1))
         @test u === @inferred(      SampleStat{M}(x1))
         @test_throws ErrorException SampleStat(   x1)
-        @test !isempty(u)
+        # Rebuild same sample statistics from moments.
         @test ms === @inferred(moments(u))
         @test typeof(ms) === V
         @test u === @inferred(                typeof(u)( 1, ms))
@@ -164,10 +179,17 @@ Base.iterate(iter::FakeIter, state) = iterate(iter.parent, state)
         @test T === @inferred(obstype(s))
         @test n === @inferred(count(s))
         @test n === @inferred(nobs(s))
+        @test !isempty(s)
+        # Rebuild same sample statistics from itself.
+        @test s === @inferred(          typeof(s)(s))
+        @test s === @inferred(    SampleStat{M,T}(s))
+        @test s === @inferred(    SampleStat{M}(  s))
+        @test s === @inferred(    SampleStat(     s))
+        # Rebuild same sample statistics from same observation(s).
         @test s === @inferred(          typeof(s)(x))
         @test s === @inferred(      SampleStat{M}(x))
         @test_throws ErrorException SampleStat(   x)
-        @test !isempty(s)
+        # Rebuild same sample statistics from moments.
         ms = @inferred(moments(s))
         @test ms === ntuple(k -> s[k], Val(M))
         @test ms === ntuple(k -> moment(s, k), Val(M))
@@ -218,6 +240,8 @@ Base.iterate(iter::FakeIter, state) = iterate(iter.parent, state)
         # Compare computed moments with those from `Statistics` or `StatsBase`.
         if M ≥ 1
             @test @inferred(mean(s)) ≈ mean_x
+        else
+            @test_throws ErrorException mean(s)
         end
         if M ≥ 2
             @test @inferred(var(s)) ≈ var_x
@@ -226,6 +250,13 @@ Base.iterate(iter::FakeIter, state) = iterate(iter.parent, state)
             @test @inferred(std(s)) ≈ sqrt(var_x)
             @test @inferred(std(s; corrected=true)) ≈ sqrt(var_x)
             @test @inferred(std(s; corrected=false)) ≈ sqrt(var_x_biased)
+        else
+            @test_throws ErrorException var(s)
+            @test_throws ErrorException var(s; corrected=true)
+            @test_throws ErrorException var(s; corrected=false)
+            @test_throws ErrorException std(s)
+            @test_throws ErrorException std(s; corrected=true)
+            @test_throws ErrorException std(s; corrected=false)
         end
 
         # Call `reduce` to compute statistics.
@@ -401,13 +432,25 @@ Base.iterate(iter::FakeIter, state) = iterate(iter.parent, state)
         @test typeof(stat) === typeof(sa)
         @test stat ≈ s
 
-        # Common errors.
-        if M == 0
-            @test_throws ErrorException empty(SampleStat{M}) # missing type T
-            # TODO @test_throws AssertionError empty(SampleStat{0x00,T}) # invalid type for M
-            # TODO @test_throws AssertionError empty(SampleStat{-1,T}) # invalid value for M
+    end
+
+    @testset "Miscellaneous" begin
+        # Check for erroneous or missing type parameters.
+        @test_throws ErrorException SampleStat{0}() # missing type T
+        @test_throws AssertionError SampleStat{0,Int}() # T is not floating-point
+        @test_throws TypeError SampleStat{:l,Float32}()
+        @test_throws ErrorException SampleStat{-1,Float32}()
+        @test_throws TypeError SampleStat{0x01,Float32}()
+
+        # Powers of a number.
+        let powers = SampleStats.powers
+            x = Float32(3) # <-- integer value for exact powers
+            @test powers(x, 0) === ()
+            @test powers(x, 1) === (x,)
+            @test powers(x, 2) === (x, x*x,)
+            @test powers(x, 3) === (x, x*x, x*x*x,)
+            @test powers(x, 4) === (x, x*x, x*x*x, x*x*x*x,)
         end
-        @test_throws AssertionError empty(SampleStat{M,Int}) # T is not floating-point
     end
 end
 
