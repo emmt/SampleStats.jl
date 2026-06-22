@@ -492,8 +492,8 @@ function Statistics.var(A::SampleStat{M}; corrected::Bool=true) where {M}
     end
 end
 
-# Compute skewness. 3 variants (g₁, b₁, and G₁) are given in https://en.wikipedia.org/wiki/Skewness,
-# the simplest one, g₁, corresponds to the one in `StatsBase`.
+# Compute skewness. 3 variants (g₁, b₁, and G₁) are given in Joanes and Gill (1998), the
+# simplest one, g₁, corresponds to the one in `StatsBase`.
 function StatsBase.skewness(stat::SampleStat, variant::Val = Val(:g1))
    order(stat) ≥ 3 || error("insufficient sample statistics order")
    return _skewness(variant, stat)
@@ -520,21 +520,25 @@ end
 
 __skewness(m3, m2) = m3/sqrt(m2)^3 # faster than m2^(3//2)
 
-# Compute kurtosis. 2 variants (g₂ and G₂) are given in  https://en.wikipedia.org/wiki/Kurtosis,
-# the simplest one, g₂, corresponds to the one in `StatsBase`.
+# Compute kurtosis. 3 variants (g₂, b₂, and G₂) are given in Joanes and Gill (1998), the
+# simplest one, g₂, corresponds to the one in `StatsBase`.
 function StatsBase.kurtosis(stat::SampleStat, variant::Val = Val(:g2))
     order(stat) ≥ 4 || error("insufficient sample statistics order")
     return _kurtosis(variant, stat)
 end
 
 function _kurtosis(::Val{:g2}, stat::SampleStat)
-    return (stat[4]/stat[2])/stat[2] - 3
+    return stat[4]/stat[2]^2 - 3
+end
+
+function _kurtosis(::Val{:b2}, stat::SampleStat)
+    n = nobs(stat)
+    return stat[4]/(n*stat[2]/(n - 1))^2 - 3
 end
 
 function _kurtosis(::Val{:G2}, stat::SampleStat)
-    T = get_precision(stat)
     n = nobs(stat)
-    return ((n - 1)*((n + 1)*(stat[4]/stat[2])/stat[2] - 3*(n - 1))/(n - 2))/(n - 3)
+    return ((n - 1)*((n + 1)*stat[4]/stat[2]^2 - 3*(n - 1))/(n - 2))/(n - 3)
 end
 
 """

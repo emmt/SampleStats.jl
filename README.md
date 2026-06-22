@@ -65,17 +65,33 @@ Applicable methods are:
 ``` julia
 count(stat) # number of observations
 nobs(stat) # idem
+
+isempty(stat) # whether no observations have been taken into account yet
+
 moments(stat) # all the moments
+
 moment(stat, k) # k-th moment
 stat[k]         # idem
+
 mean(stat) # sample mean
 stat[1]    # idem
+
 var(stat; corrected=true)  # unbiased sample variance
 var(stat; corrected=false) # biased sample variance
 var(stat)                  # idem
 stat[2]                    # idem
+
 std(stat; corrected=...)   # sample standard deviation
-isempty(stat) # whether no observations have been taken into account yet
+
+skewness(stat, Val(:g1)) # sample skewness according to definition g₁ in Joanes and Gill (1998)
+skewness(stat)           # idem
+skewness(stat, Val(:G1)) # sample skewness according to definition G₁ in Joanes and Gill (1998)
+skewness(stat, Val(:b1)) # sample skewness according to definition b₁ in Joanes and Gill (1998)
+
+kurtosis(stat, Val(:g2)) # sample kurtosis according to definition g₂ in Joanes and Gill (1998)
+kurtosis(stat)           # idem
+kurtosis(stat, Val(:G2)) # sample kurtosis according to definition G₂ in Joanes and Gill (1998)
+kurtosis(stat, Val(:b2)) # sample kurtosis according to definition b₂ in Joanes and Gill (1998)
 ```
 
 By default, keyword `corrected` is `false` in the `var` and `std` methods.

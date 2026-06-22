@@ -479,15 +479,22 @@ brief(::Type{SampleStat{M,T}}) where {M,T} =
         @test var(s) ≈ var(x) rtol=rtol
         @test var(s; corrected=true) ≈ var(x; corrected=true) rtol=rtol
         @test var(s; corrected=false) ≈ var(x; corrected=false) rtol=rtol
+        g1 = m[3]/m[2]^(3//2)
+        G1 = sqrt(n*(n - 1))/(n - 2)*g1
+        b1 = m[3]/(n*m[2]/(n - 1))^(3//2)
         @test skewness(s) ≈ skewness(x) rtol=rtol
-        @test skewness(s, Val(:g1)) ≈ skewness(x) rtol=rtol
-        @test skewness(s, Val(:g1)) ≈ m[3]/m[2]^(3//2) rtol=rtol
-        @test skewness(s, Val(:b1)) ≈ m[3]/(n*m[2]/(n - 1))^(3//2) rtol=rtol
-        @test skewness(s, Val(:G1)) ≈ sqrt(n*(n - 1))/(n - 2)*m[3]/m[2]^(3//2) rtol=rtol
+        @test skewness(s, Val(:g1)) == skewness(s)
+        @test skewness(s, Val(:g1)) ≈ g1 rtol=rtol
+        @test skewness(s, Val(:G1)) ≈ G1 rtol=rtol
+        @test skewness(s, Val(:b1)) ≈ b1 rtol=rtol
+        g2 = m[4]/m[2]^2 - 3
+        G2 = ((n - 1)/((n - 2)*(n - 3)))*((n + 1)*g2 + 6)
+        b2 = m[4]/(n*m[2]/(n - 1))^2 - 3
         @test kurtosis(s) ≈ kurtosis(x) rtol=rtol
-        @test kurtosis(s, Val(:g2)) ≈ kurtosis(x) rtol=rtol
-        @test kurtosis(s, Val(:g2)) ≈ m[4]/m[2]^2 - 3 rtol=rtol
-        @test kurtosis(s, Val(:G2)) ≈ ((n - 1)/((n - 2)*(n - 3)))*((n + 1)*m[4]/m[2]^2 - 3*(n - 1)) rtol=rtol
+        @test kurtosis(s, Val(:g2)) == kurtosis(s)
+        @test kurtosis(s, Val(:g2)) ≈ g2 rtol=rtol
+        @test kurtosis(s, Val(:G2)) ≈ G2 rtol=rtol
+        @test kurtosis(s, Val(:b2)) ≈ b2 rtol=rtol
     end
 end
 
