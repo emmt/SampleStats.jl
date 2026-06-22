@@ -155,23 +155,23 @@ brief(::Type{SampleStat{M,T}}) where {M,T} =
         end
 
         # Compute sample statistics from iterable object.
-        moments_x = ()
-        mean_x = zero(T)
-        var_x = zero(T)
-        var_x_biased = zero(T)
-        if M ≥ 1
+        mean_x = M ≥ 1 ? mean(x) : zero(T)
+        var_x = M ≥ 2 ? var(x; corrected=true) : zero(T)^2
+        var_x_biased = M ≥ 2 ? var(x; corrected=false) : zero(T)^2
+        skewness_x = M ≥ 3 ? skewness(x) : zero(T)
+        kurtosis_x = M ≥ 4 ? kurtosis(x) : zero(T)
+        moments_x = if M < 1; (); else
             μ = sum(x)/n # sample mean
             xc = x .- μ # centered observations
-            moments_x = ntuple(k -> k == 1 ? μ : sum(xc.^k)/n, Val(M))
-            mean_x = mean(x)
-            @test moments_x[1] ≈ mean_x
-            if M ≥ 2
-                var_x = var(x; corrected=true)
-                var_x_biased = var(x; corrected=false)
-                @test moments_x[2] ≈ var_x_biased
-            end
+            ntuple(k -> k == 1 ? μ : sum(xc.^k)/n, Val(M))
         end
         @test typeof(moments_x) === V
+        if M ≥ 1
+            @test moments_x[1] ≈ mean_x
+        end
+        if M ≥ 2
+            @test moments_x[2] ≈ var_x_biased
+        end
         #
         s = @inferred(SampleStat{M,T}(x))
         @test typeof(s) === SampleStat{M,T,V}
@@ -257,6 +257,16 @@ brief(::Type{SampleStat{M,T}}) where {M,T} =
             @test_throws ErrorException std(s)
             @test_throws ErrorException std(s; corrected=true)
             @test_throws ErrorException std(s; corrected=false)
+        end
+        if M ≥ 3
+            @test @inferred(skewness(s)) ≈ skewness_x
+        else
+            @test_throws ErrorException skewness(s)
+        end
+        if M ≥ 4
+            @test @inferred(kurtosis(s)) ≈ kurtosis_x
+        else
+            @test_throws ErrorException kurtosis(s)
         end
 
         # Call `reduce` to compute statistics.
@@ -451,6 +461,33 @@ brief(::Type{SampleStat{M,T}}) where {M,T} =
             @test powers(x, 3) === (x, x*x, x*x*x,)
             @test powers(x, 4) === (x, x*x, x*x*x, x*x*x*x,)
         end
+
+        # Test the different formulae for the skewness and kurtosis of a small sample so that
+        # the different estimators have quite different values.
+        x = BigFloat[1,2,2,2,3,3,4,4,5,7,9,11] # very high precision
+        n = big(length(x))
+        s = SampleStat{4}(x)
+        μ = sum(x)/n
+        z = x .- μ # centered variables
+        m = (μ, ntuple(k -> sum(z.^(k+1))/n, 3)...,)
+        rtol = 1e-50 # require very high relative precision
+        @test s[1] ≈ m[1] rtol=rtol
+        @test s[2] ≈ m[2] rtol=rtol
+        @test s[3] ≈ m[3] rtol=rtol
+        @test s[4] ≈ m[4] rtol=rtol
+        @test mean(s) ≈ mean(x) rtol=rtol
+        @test var(s) ≈ var(x) rtol=rtol
+        @test var(s; corrected=true) ≈ var(x; corrected=true) rtol=rtol
+        @test var(s; corrected=false) ≈ var(x; corrected=false) rtol=rtol
+        @test skewness(s) ≈ skewness(x) rtol=rtol
+        @test skewness(s, Val(:g1)) ≈ skewness(x) rtol=rtol
+        @test skewness(s, Val(:g1)) ≈ m[3]/m[2]^(3//2) rtol=rtol
+        @test skewness(s, Val(:b1)) ≈ m[3]/(n*m[2]/(n - 1))^(3//2) rtol=rtol
+        @test skewness(s, Val(:G1)) ≈ sqrt(n*(n - 1))/(n - 2)*m[3]/m[2]^(3//2) rtol=rtol
+        @test kurtosis(s) ≈ kurtosis(x) rtol=rtol
+        @test kurtosis(s, Val(:g2)) ≈ kurtosis(x) rtol=rtol
+        @test kurtosis(s, Val(:g2)) ≈ m[4]/m[2]^2 - 3 rtol=rtol
+        @test kurtosis(s, Val(:G2)) ≈ ((n - 1)/((n - 2)*(n - 3)))*((n + 1)*m[4]/m[2]^2 - 3*(n - 1)) rtol=rtol
     end
 end
 
