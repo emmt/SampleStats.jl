@@ -24,6 +24,15 @@ str(u::Any) = string(u)
 brief(::Type{SampleStat{M,T}}) where {M,T} =
     "order: $M, precision: $(get_precision(T)), units: $(str(units_of(T)))"
 
+least_precision(::Type{Float16}, ::Type{<:Union{Float16,Float32,Float64,BigFloat}}) = Float16
+least_precision(::Type{Float32}, ::Type{<:Union{Float32,Float64,BigFloat}}) = Float32
+least_precision(::Type{Float64}, ::Type{<:Union{Float64,BigFloat}}) = Float64
+least_precision(::Type{BigFloat}, ::Type{BigFloat}) = BigFloat
+least_precision(::Type{S}, ::Type{T}) where {S<:AbstractFloat,T<:AbstractFloat} =
+    least_precision(T,S)
+least_precision(::Type{S}, ::Type{T}) where {S<:Number,T<:Number} =
+    least_precision(get_precision(S), get_precision(T))
+
 @testset "SampleStats" begin
 
     @testset "Code quality (Aqua)" begin
@@ -31,14 +40,23 @@ brief(::Type{SampleStat{M,T}}) where {M,T} =
     end
 
     @testset "Sample statistics ($(brief(SampleStat{M,T})))" for (M,T) in (
-        (0, Float32), (1, Float32), (2, Float32), (3, Float32), (4, Float32), (11, Float32),)
+        (0, Float64), (1, Float64), (2, Float16), (3, Float32), (4, Float64), (11, Float64),)
+
+        # NOTE Do not test on big float here since it would break `===` comparisons.
+        @assert get_precision(T) != BigFloat
+
+        # Other precision and tolerance when reducing precision.
+        Tp = adapt_precision(get_precision(T) == Float64 ? Float32 : Float64, T)
+        Lp = least_precision(T, Tp)
+        reduced_rtol =
+            Lp == Float16 ? 1/(1<< 4) :
+            Lp == Float32 ? 1/(1<<10) :
+            Lp == Float64 ? 1/(1<<24) : error("bad precision")
 
         # Generate data.
-        Tp = adapt_precision(get_precision(T) != Float32 ? Float32 : Float64, T)
-        n = 123
+        n = 37
         V = typeof(ntuple(k -> zero(T)^k, Val(M)))
         Vp = typeof(ntuple(k -> zero(Tp)^k, Val(M)))
-        Tp = adapt_precision(Float64, T) # double precision, so that conversion T -> Tp is exact
         Tp² = typeof(zero(Tp)^2)
         Tp³ = typeof(zero(Tp)^3)
         x = rand(T, n) .- T(1//3) # offset is to avoid "centered" variables
@@ -315,6 +333,20 @@ brief(::Type{SampleStat{M,T}}) where {M,T} =
             @test startswith(q, "SampleStat{$M,")
         end
 
+        # Comparison.
+        sr = @inferred(SampleStat{M,T}(length(x), moments_x))
+        @test typeof(sr) === typeof(s)
+        if M == 0
+            # For M = 0, there are no possible rounding errors; hence, compare exactly.
+            @test s === sr
+            @test s == sr
+            @test s ≈ sr
+        else
+            # For M > 0, due to rounding errors, only compare approximately.
+            @test s == s
+            @test s ≈ sr
+        end
+
         # Change precision.
         sp = @inferred(SampleStat{M,Tp}(count(s), moments(s)))
         @test @inferred(order(sp)) === M
@@ -324,22 +356,7 @@ brief(::Type{SampleStat{M,T}}) where {M,T} =
         @test @inferred(count(sp)) === n
         @test @inferred(moments(sp)) === adapt_precision(Tp, moments(s))
         @test sp !== s
-
-        # Comparison.
-        sr = @inferred(SampleStat{M,T}(length(x), moments_x))
-        @test typeof(sr) === typeof(s)
-        if M == 0
-            # For M = 0, there are no possible rounding errors; hence, compare exactly.
-            @test s === sr
-            @test s == sr
-            @test s ≈ sr
-            @test s ≈ sp rtol=1e-5
-        else
-            # For M > 0, due to rounding errors, only compare approximately.
-            @test s == s
-            @test s ≈ sr
-            @test s ≈ sp rtol=1e-5
-        end
+        @test sp ≈ s rtol=reduced_rtol
 
         # Conversions.
         #
@@ -440,7 +457,7 @@ brief(::Type{SampleStat{M,T}}) where {M,T} =
         sbp = @inferred(SampleStat{M+1,Tp}(xb))
         stat = @inferred(merge(sa, sbp))
         @test typeof(stat) === typeof(sa)
-        @test stat ≈ s
+        @test stat ≈ s rtol=reduced_rtol
 
     end
 
