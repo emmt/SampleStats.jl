@@ -492,8 +492,6 @@ function Statistics.var(A::SampleStat{M}; corrected::Bool=true) where {M}
     end
 end
 
-# NOTE `merge(A::SampleStat, B)` returns an object of same type as `A`.
-#
 """
     merge(A::SampleStat, B) -> C::typeof(A)
 
