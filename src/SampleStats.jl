@@ -165,14 +165,6 @@ moments(A::SampleStat) = getfield(A, :moments)
 order(A::SampleStat) = order(typeof(A))
 order(A::Type{<:SampleStat{M,T}}) where {M,T} = M
 #
-check_order(M::Int) = M ≥ 0
-check_order(M::Any) = false
-#
-@noinline throw_bad_order(M::Int) = throw(AssertionError(
-    "statistics order must be non-negative, got `M = $M`"))
-@noinline throw_bad_order(M::Any) = throw(AssertionError(
-    "statistics order must be an `Int`, got `typeof(M) = $(typeof(M))`"))
-#
 # Type of observations.
 obstype(A::SampleStat) = obstype(typeof(A))
 obstype(A::Type{<:SampleStat{M,T}}) where {M,T} = T
@@ -260,7 +252,6 @@ SampleStat{M}(::Type{T}) where {M,T<:Number} = empty(SampleStat{M,float(T)})
 @noinline SampleStat() = error("missing statistic order and observation type")
 
 @generated function _empty(::Type{SampleStat{M,T}}) where {M,T}
-    check_order(M) || return :(throw_bad_order(M))
     check_obstype(T) || return :(throw_bad_obstype(T))
     moments = powers(zero(T), Val(M))
     quote
@@ -337,7 +328,6 @@ statistics; by default, `T = float(typeof(x))`.
 SampleStat{M}(x::Number) where {M} = SampleStat{M,float(typeof(x))}(x)
 
 function SampleStat{M,T}(x::Number) where {M,T}
-    check_order(M) || throw_bad_order(M)
     check_obstype(T) || throw_bad_obstype(T)
     return _init(SampleStat{M,T}, x)
 end
@@ -373,7 +363,6 @@ function SampleStat{M}(iter) where {M}
 end
 
 function SampleStat{M,T}(iter) where {M,T}
-    check_order(M) || throw_bad_order(M)
     check_obstype(T) || throw_bad_obstype(T)
     return _reduce(SampleStat{M,T}, iter)
 end
