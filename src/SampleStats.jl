@@ -620,16 +620,14 @@ end
     nA = count(A)
     nC = nA + 1
     μA = A[1]
-    @static if false
-        # Version 1:
-        δμ = (x - μA)/nC
-        return S(nC, (μA + δμ, (A[2]/nC + δμ^2)*nA)) # call inner constructor
-    else
-        # Version 2:
-        β = 1/T(nC)
-        δμ = β*(x - μA)
-        return S(nC, (μA + δμ, (β*A[2] + δμ^2)*nA)) # call inner constructor
-    end
+    #= Version 1:
+    δμ = (x - μA)/nC
+    return S(nC, (μA + δμ, (A[2]/nC + δμ^2)*nA)) # call inner constructor
+    =#
+    # Version 2:
+    β = 1/T(nC)
+    δμ = β*(x - μA)
+    return S(nC, (μA + δμ, (β*A[2] + δμ^2)*nA)) # call inner constructor
 end
 
 @inline function Base.merge(A::S, B::S) where {S<:SampleVariance}
